@@ -9,6 +9,7 @@ of what tapedeck is tested against.
 
 | SDK (`ai`) | Date tested | tapedeck | Status | Notes |
 |------------|-------------|----------|--------|-------|
+| 6.0.0      | 2026-06-10  | 0.2.0    | ✅ pass | Same spec surface as the launch row. Hash digests and cassette format unchanged — 0.1.0 cassettes replay as-is. |
 | 6.0.0      | 2026-06-10  | 0.1.0    | ✅ pass | Launch row. Model spec v3: `doGenerate` returns `content[]`; `doStream` yields `text-delta` / `tool-call` parts. |
 
 ## Pinned peer range
@@ -20,6 +21,29 @@ of what tapedeck is tested against.
 Bumping the SDK major requires a tapedeck major. The cassette `version` field
 (`tapedeck@<pkg>`) and the recorded `modelProvider` / `modelId` make a format
 boundary loud at replay time.
+
+## Edge runtimes (Cloudflare Workers, etc.)
+
+As of 0.2.0 the core import graph is edge-safe:
+
+- **Hashing** uses WebCrypto (`crypto.subtle.digest`) — available in Node ≥18,
+  Workers, and browsers. No `node:crypto`.
+- **Storage** goes through the `CassetteStore` interface. The default
+  filesystem store imports `node:fs` *lazily, on first use* — pass
+  `memoryCassetteStore()` (or a KV/R2-backed store) and `node:fs` is never
+  loaded. No `node:path` anywhere.
+- The one static Node builtin left is `node:async_hooks`
+  (`AsyncLocalStorage`, used by `withCassette`'s ambient context). Cloudflare
+  Workers provides it under the
+  [`nodejs_compat`](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)
+  compatibility flag.
+
+Verified by inspection of the built bundle (the test suite asserts a full
+record→replay round trip against `memoryCassetteStore` with no filesystem).
+A deployed-Worker smoke test is still TODO — treat Workers support as
+*designed-for, not yet CI-verified*.
+
+The CLI (`tapedeck record|replay|ls|diff|merge`) is Node-only by design.
 
 ## What "pass" means
 

@@ -117,19 +117,31 @@ This pairs the two packages: guard in production with ToolRoute, replay in CI wi
 - Tests: vitest, no live API calls in CI (self-hosting: tapedeck tests use tapedeck).
 - Package: dual ESM/CJS, tsup.
 
-## Milestone 0.1.0 (First Week)
+## Milestone 0.1.0 — shipped
 
-1. `cassetteMiddleware` for `doGenerate` — record/replay/live modes.
+1. `cassetteMiddleware` for `doGenerate` **and** `doStream` — record/replay/live modes.
 2. Streaming: record chunk arrays, replay as real streams.
 3. `withCassette()` vitest helper.
 4. Secret redaction.
-5. README with 10-second demo, comparison table, adopt in PRCompass.
+5. README with 10-second demo, comparison table.
 6. Publish to npm.
 
-## Deferred to 0.2.0
+## Milestone 0.2.0 — shipped
 
-- `doStream` support (non-streaming generate).
-- OTel span emission.
-- `npx tapedeck record <script>` CLI.
-- Cassette diff / merge tooling.
-- Cloudflare Workers / Edge runtime validation.
+- OTel span emission: structural `tracer` option (`src/telemetry.ts`), zero deps.
+- `npx tapedeck record|replay|ls|diff|merge` CLI (`src/cli.ts`, bin → `dist/cli.js`).
+- Cassette diff / merge: `diffCassettes` (`src/diff.ts`), `mergeCassetteDirs` (`src/merge.ts`).
+- Edge-safe core: pluggable `CassetteStore` (`src/store.ts`, file + memory),
+  WebCrypto hashing (`computeCassetteHash` is async), no static `node:fs`/`node:path`/`node:crypto`.
+  Only `node:async_hooks` remains (Workers `nodejs_compat`). tsup `removeNodeProtocol: false`
+  keeps `node:` prefixes in the bundle.
+
+## Deferred to 0.3.0
+
+- Deployed Cloudflare Workers smoke test in CI (edge support is designed-for, not CI-verified).
+- Multi-interaction named cassettes: a `withCassette` test whose agent makes
+  several model calls currently overwrites the single named file in record mode
+  and serves the same response to every call in replay. Needs a v2 format that
+  stores an array of interactions keyed by hash.
+- `toFollowRoute()` ToolRoute matcher in `tapedeck/vitest`.
+- Adopt in PRCompass.
