@@ -37,9 +37,9 @@ code changes.
 <h2 id="install">Install</h2>
 
 ```bash
-npm install -D tapedeck
+npm install -D @nkwib/tapedeck
 # or
-pnpm add -D tapedeck
+pnpm add -D @nkwib/tapedeck
 ```
 
 Requires the `ai` peer (`>=6.0.0 <7`). tapedeck has zero runtime dependencies
@@ -53,7 +53,7 @@ integration:
 ```ts
 import { openai } from '@ai-sdk/openai';
 import { generateText, wrapLanguageModel } from 'ai';
-import { cassetteMiddleware } from 'tapedeck';
+import { cassetteMiddleware } from '@nkwib/tapedeck';
 
 const model = wrapLanguageModel({
   model: openai('gpt-4o'),
@@ -206,12 +206,12 @@ cassetteMiddleware({
 
 <h2 id="vitest">Vitest helper</h2>
 
-`tapedeck/vitest` exports `withCassette(name, testFn, options?)`, which pins a
+`@nkwib/tapedeck/vitest` exports `withCassette(name, testFn, options?)`, which pins a
 test to a named cassette and forces `replay` mode for its duration:
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { withCassette } from 'tapedeck/vitest';
+import { withCassette } from '@nkwib/tapedeck/vitest';
 
 describe('checkout agent', () => {
   it('runs the checkout flow', async () => {
@@ -254,7 +254,7 @@ Things explicitly **not in v1**, deferred to a future release:
 - **Cloudflare Workers / Edge runtime validation** — v1 targets Node test
   runners; Edge support is unverified.
 - **`toFollowRoute()` matcher** — the planned [toolroute](https://github.com/nkwib/toolroute)
-  cross-sell that asserts trajectories from `tapedeck/vitest` is not shipped
+  cross-sell that asserts trajectories from `@nkwib/tapedeck/vitest` is not shipped
   yet.
 
 See the [v2 deferred index](https://github.com/nkwib/tapedeck/blob/main/issues/999-v2-deferred.md)

@@ -28,7 +28,7 @@
         <a class="btn ghost" href="/before-after">See before / after</a>
       </div>
 
-      <pre class="install"><span class="prompt">$</span> pnpm add -D tapedeck</pre>
+      <pre class="install"><span class="prompt">$</span> pnpm add -D @nkwib/tapedeck</pre>
     </div>
 
     <aside class="demo">
@@ -38,7 +38,7 @@
       </div>
       <pre class="demo-code"><code><span class="kw">import</span> &lbrace; openai &rbrace; <span class="kw">from</span> <span class="str">'@ai-sdk/openai'</span>;
 <span class="kw">import</span> &lbrace; wrapLanguageModel &rbrace; <span class="kw">from</span> <span class="str">'ai'</span>;
-<span class="kw">import</span> &lbrace; cassetteMiddleware &rbrace; <span class="kw">from</span> <span class="str">'tapedeck'</span>;
+<span class="kw">import</span> &lbrace; cassetteMiddleware &rbrace; <span class="kw">from</span> <span class="str">'@nkwib/tapedeck'</span>;
 
 <span class="kw">const</span> <span class="fn">model</span> = <span class="fn">wrapLanguageModel</span>(&lbrace;
   <span class="prop">model</span>: <span class="fn">openai</span>(<span class="str">'gpt-4o'</span>),
@@ -189,7 +189,7 @@
     <div class="cta">
       <a class="btn primary" href="/docs#quickstart">Quickstart</a>
       <a class="btn ghost" href="/decisions/middleware-not-proxy">Why middleware?</a>
-      <a class="btn ghost" href="https://www.npmjs.com/package/tapedeck" target="_blank" rel="noopener">
+      <a class="btn ghost" href="https://www.npmjs.com/package/@nkwib/tapedeck" target="_blank" rel="noopener">
         View on npm
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M7 17L17 7M17 7H9M17 7V15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />

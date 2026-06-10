@@ -5,7 +5,7 @@
 **Record/replay middleware for the [Vercel AI SDK](https://sdk.vercel.ai).** Wrap your model in one line. Run your agent test once against the live API — commit the cassette. Every CI run after that is deterministic, offline, free, and stream-accurate.
 
 ```bash
-npm install -D tapedeck
+npm install -D @nkwib/tapedeck
 ```
 
 > Requires `ai` v6 (`>=6.0.0 <7`). tapedeck operates at the `wrapLanguageModel` middleware layer (model spec **v3**), so it's provider-agnostic and stream-aware by construction — no HTTP proxy, no infra.
@@ -17,7 +17,7 @@ npm install -D tapedeck
 ```typescript
 import { openai } from '@ai-sdk/openai';
 import { generateText, wrapLanguageModel } from 'ai';
-import { cassetteMiddleware } from 'tapedeck';
+import { cassetteMiddleware } from '@nkwib/tapedeck';
 
 const model = wrapLanguageModel({
   model: openai('gpt-4o'),
@@ -65,11 +65,11 @@ The recommended setup: `live` in development, `record` to capture a fixture once
 
 ## Vitest helper
 
-`tapedeck/vitest` exports `withCassette`, which pins a test to a named cassette and forces `replay` mode for its duration:
+`@nkwib/tapedeck/vitest` exports `withCassette`, which pins a test to a named cassette and forces `replay` mode for its duration:
 
 ```typescript
 import { describe, it, expect } from 'vitest';
-import { withCassette } from 'tapedeck/vitest';
+import { withCassette } from '@nkwib/tapedeck/vitest';
 
 describe('checkout agent', () => {
   it('runs the checkout flow', async () => {
@@ -185,9 +185,9 @@ Returns an AI SDK `LanguageModelV3Middleware`. Intercepts both `doGenerate` and 
 
 ### `withCassette(name, testFn, options?)`
 
-From `tapedeck/vitest`. Runs `testFn` with `name` pinned and `replay` forced (override via `options.mode`). `options.cassetteDir` overrides the directory.
+From `@nkwib/tapedeck/vitest`. Runs `testFn` with `name` pinned and `replay` forced (override via `options.mode`). `options.cassetteDir` overrides the directory.
 
-### Lower-level helpers (exported from `tapedeck`)
+### Lower-level helpers (exported from `@nkwib/tapedeck`)
 
 - `computeCassetteHash(request)` — the stable hash used for cassette identity.
 - `loadCassette(hash, dir)` / `saveCassette(hash, dir, cassette)` — direct cassette I/O.
