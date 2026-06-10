@@ -14,7 +14,7 @@ the SDK's own `wrapLanguageModel`, and it intercepts `doGenerate` and
 ```ts
 import { openai } from '@ai-sdk/openai';
 import { generateText, wrapLanguageModel } from 'ai';
-import { cassetteMiddleware } from 'tapedeck';
+import { cassetteMiddleware } from '@nkwib/tapedeck';
 
 const model = wrapLanguageModel({
   model: openai('gpt-4o'),

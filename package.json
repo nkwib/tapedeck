@@ -1,5 +1,5 @@
 {
-  "name": "tapedeck",
+  "name": "@nkwib/tapedeck",
   "version": "0.1.0",
   "description": "Record/replay middleware for the Vercel AI SDK. Test your agents offline, deterministically, with zero API calls.",
   "license": "MIT",

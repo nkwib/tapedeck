@@ -5,7 +5,7 @@
 
 # API
 
-Every public symbol exported from `tapedeck`. Source of truth:
+Every public symbol exported from `@nkwib/tapedeck`. Source of truth:
 [`src/index.ts`](https://github.com/nkwib/tapedeck/blob/main/src/index.ts).
 
 | Export | Kind | What it does |
@@ -52,7 +52,7 @@ and replaying with no other code changes. A bad static `mode` throws
 ```ts
 import { openai } from '@ai-sdk/openai';
 import { generateText, wrapLanguageModel } from 'ai';
-import { cassetteMiddleware } from 'tapedeck';
+import { cassetteMiddleware } from '@nkwib/tapedeck';
 
 const model = wrapLanguageModel({
   model: openai('gpt-4o'),
@@ -88,7 +88,7 @@ When the ambient [`withCassette`](#withCassette) context is active, its `mode`,
 ): Promise<T>`}
 />
 
-From `tapedeck/vitest`. Runs `testFn` with `cassetteName` pinned and `replay`
+From `@nkwib/tapedeck/vitest`. Runs `testFn` with `cassetteName` pinned and `replay`
 forced for its duration, publishing an ambient context (via `AsyncLocalStorage`)
 that any active [`cassetteMiddleware`](#cassetteMiddleware) instance picks up. The
 context tears down automatically on exit — no global setup/teardown needed.
@@ -98,7 +98,7 @@ directory. The `WithCassetteOptions` shape is `&lbrace; cassetteDir?: string; mo
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { withCassette } from 'tapedeck/vitest';
+import { withCassette } from '@nkwib/tapedeck/vitest';
 
 describe('checkout agent', () => {
   it('runs the checkout flow', async () => {
@@ -130,7 +130,7 @@ subclass and restores the prototype chain (`Object.setPrototypeOf`), so
 `instanceof` works across module boundaries and downlevel transpilation.
 
 ```ts
-import { CassetteError } from 'tapedeck';
+import { CassetteError } from '@nkwib/tapedeck';
 
 try {
   await generateText({ model, prompt });
@@ -216,7 +216,7 @@ cosmetic description changes don't invalidate a cassette but a changed prompt,
 input schema, or sampling param does.
 
 ```ts
-import { computeCassetteHash } from 'tapedeck';
+import { computeCassetteHash } from '@nkwib/tapedeck';
 
 const hash = computeCassetteHash({
   modelProvider: 'openai',

@@ -22,7 +22,7 @@ follow once the API has been used in anger.
   `x-api-key`, `bearer`, `token` (case-insensitive). Configurable via
   `redact: (string | RegExp)[]`. A replayed cassette that still contains a value
   a matcher would strip throws `CassetteSecretError`.
-- `withCassette(name, testFn, options?)` from `tapedeck/vitest` — pins a test to
+- `withCassette(name, testFn, options?)` from `@nkwib/tapedeck/vitest` — pins a test to
   a named cassette and forces `replay` for its duration via `AsyncLocalStorage`.
 - Error family — `CassetteMissError`, `CassetteSecretError`,
   `CassetteCorruptError`, `CassetteModeError`, all extending `CassetteError`.

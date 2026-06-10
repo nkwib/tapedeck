@@ -33,8 +33,8 @@ describe('checkout agent', () => {
 const afterCode = `import { describe, it, expect } from 'vitest';
 import { openai } from '@ai-sdk/openai';
 import { wrapLanguageModel } from 'ai';
-import { withCassette } from 'tapedeck/vitest';
-import { cassetteMiddleware } from 'tapedeck';
+import { withCassette } from '@nkwib/tapedeck/vitest';
+import { cassetteMiddleware } from '@nkwib/tapedeck';
 
 // Wrap the model once. Behaviour switches on one env var — nothing else.
 const model = wrapLanguageModel({
