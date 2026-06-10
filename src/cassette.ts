@@ -4,8 +4,6 @@
 // plus the recorded response (either a one-shot generate result or an ordered
 // array of stream parts). Files are pretty-printed so they diff cleanly in PRs.
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
 import type {
   LanguageModelV3Content,
   LanguageModelV3FinishReason,
@@ -20,6 +18,7 @@ import type {
   SharedV3Warning,
 } from '@ai-sdk/provider';
 import { CassetteCorruptError } from './errors.js';
+import { fileCassetteStore } from './store.js';
 
 /** Cassette format version. Bumped on any breaking change to the shape below. */
 export const CASSETTE_VERSION = 'tapedeck@0.1.0';
@@ -75,36 +74,32 @@ export function cassetteFilename(hash: string): string {
   return `${hash}.cassette.json`;
 }
 
+/** Join a directory and filename without `node:path` (edge-importable). */
+function joinPath(dir: string, name: string): string {
+  return `${dir.replace(/[/\\]+$/, '')}/${name}`;
+}
+
 /** Resolve the path for a hash-addressed cassette. */
 export function cassettePathForHash(dir: string, hash: string): string {
-  return join(dir, cassetteFilename(hash));
+  return joinPath(dir, cassetteFilename(hash));
 }
 
 /** Resolve the path for a name-addressed cassette (e.g. from `withCassette`). */
 export function cassettePathForName(dir: string, name: string): string {
-  return join(dir, name);
+  return joinPath(dir, name);
 }
 
-/** Persist a cassette to `path`, creating parent directories as needed. */
-export async function writeCassetteFile(path: string, cassette: Cassette): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(cassette, null, 2)}\n`, 'utf8');
+/** Serialize a cassette to its on-disk form: pretty-printed, trailing newline. */
+export function serializeCassette(cassette: Cassette): string {
+  return `${JSON.stringify(cassette, null, 2)}\n`;
 }
 
 /**
- * Read and validate a cassette from `path`. Returns `null` if the file does not
- * exist (a cassette miss); throws {@link CassetteCorruptError} for anything that
- * exists but is unreadable.
+ * Parse and validate raw cassette text. Throws {@link CassetteCorruptError} for
+ * bad JSON, an unknown version, or a malformed response shape. `path` is only
+ * used for error messages.
  */
-export async function readCassetteFile(path: string): Promise<Cassette | null> {
-  let raw: string;
-  try {
-    raw = await readFile(path, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
-
+export function parseCassette(raw: string, path: string): Cassette {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -114,8 +109,22 @@ export async function readCassetteFile(path: string): Promise<Cassette | null> {
       reason: `invalid JSON: ${(err as Error).message}`,
     });
   }
-
   return validateCassette(parsed, path);
+}
+
+/** Persist a cassette to `path` on disk, creating parent directories as needed. */
+export async function writeCassetteFile(path: string, cassette: Cassette): Promise<void> {
+  await fileCassetteStore().write(path, serializeCassette(cassette));
+}
+
+/**
+ * Read and validate a cassette from `path` on disk. Returns `null` if the file
+ * does not exist (a cassette miss); throws {@link CassetteCorruptError} for
+ * anything that exists but is unreadable.
+ */
+export async function readCassetteFile(path: string): Promise<Cassette | null> {
+  const raw = await fileCassetteStore().read(path);
+  return raw === null ? null : parseCassette(raw, path);
 }
 
 function validateCassette(parsed: unknown, path: string): Cassette {

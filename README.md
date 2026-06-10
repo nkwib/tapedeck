@@ -140,6 +140,76 @@ Tool schemas are normalized (descriptions stripped, keys sorted) so cosmetic doc
 
 ---
 
+## CLI
+
+The package ships a small CLI for the record/replay workflow:
+
+```bash
+npx tapedeck record ./scripts/checkout-demo.mjs   # run with CASSETTE_MODE=record
+npx tapedeck replay ./scripts/checkout-demo.mjs   # run with CASSETTE_MODE=replay
+npx tapedeck record pnpm test                     # non-file args run as commands on PATH
+
+npx tapedeck ls ./cassettes                       # kind, model, recordedAt per cassette
+npx tapedeck diff a.cassette.json b.cassette.json # semantic field-level diff (exit 1 on difference)
+npx tapedeck merge ./cassettes-from-ci ./cassettes  # merge directories; --force overwrites conflicts
+```
+
+`diff` reports *which fields* diverged (`request.prompt[0].content[0].text`)
+instead of raw JSON noise, and ignores `recordedAt`. `merge` skips identical
+files, copies new ones, and fails on conflicts unless `--force` is passed —
+both are also available as library functions (`diffCassettes`,
+`mergeCassetteDirs`).
+
+---
+
+## Telemetry (OpenTelemetry)
+
+Pass any OTel-compatible tracer and every record/replay emits a span — tapedeck
+types the tracer structurally, so it keeps zero runtime dependencies:
+
+```typescript
+import { trace } from '@opentelemetry/api';
+
+cassetteMiddleware({
+  mode: 'replay',
+  tracer: trace.getTracer('tapedeck'),
+});
+```
+
+Spans are named `tapedeck.generate` / `tapedeck.stream` and carry
+`tapedeck.mode`, `tapedeck.hash`, `tapedeck.cassette_path`,
+`tapedeck.model_provider`, `tapedeck.model_id`, `tapedeck.cassette_hit`, and
+`tapedeck.chunk_count` (streams). A cassette miss records the exception and an
+error status, so a failing CI replay is visible in your traces. No tracer → no
+overhead.
+
+---
+
+## Storage & edge runtimes
+
+Cassette I/O goes through a `CassetteStore` (`read`/`write`/`list`). The
+default is the filesystem; pass your own for everything else:
+
+```typescript
+import { cassetteMiddleware, memoryCassetteStore } from 'tapedeck';
+
+// Tests / edge: bundle cassettes with the worker, no fs needed.
+const store = memoryCassetteStore({
+  'cassettes/abc….cassette.json': cassetteJsonText,
+});
+
+cassetteMiddleware({ mode: 'replay', store });
+```
+
+The core never touches `node:fs`, `node:path`, or `node:crypto` statically —
+hashing uses WebCrypto and the file store loads `node:fs` lazily. The one
+remaining Node builtin is `node:async_hooks` (for `withCassette`'s ambient
+context), which Cloudflare Workers provides under the `nodejs_compat` flag.
+On Workers: enable `nodejs_compat`, replay from a `memoryCassetteStore` (or a
+KV/R2-backed `CassetteStore`), and record from Node. See `COMPATIBILITY.md`.
+
+---
+
 ## Secret redaction
 
 Redaction is key-name based and runs **at record time**, so secrets never reach disk:
@@ -182,6 +252,8 @@ Returns an AI SDK `LanguageModelV3Middleware`. Intercepts both `doGenerate` and 
 | `cassetteDir` | `string` | `'./cassettes'` | Directory cassettes are read from / written to. |
 | `redact` | `(string \| RegExp)[]` | `[]` | Extra key matchers, merged with the built-in defaults. |
 | `cassetteName` | `string` | — | Force a specific filename instead of hash-addressing. Mostly used internally by `withCassette`. |
+| `store` | `CassetteStore` | filesystem | Storage backend (`read`/`write`/`list`). Use `memoryCassetteStore()` on edge runtimes. |
+| `tracer` | `TapedeckTracer` | — | OTel-compatible tracer; emits `tapedeck.generate` / `tapedeck.stream` spans. |
 
 ### `withCassette(name, testFn, options?)`
 
@@ -189,8 +261,12 @@ From `@nkwib/tapedeck/vitest`. Runs `testFn` with `name` pinned and `replay` for
 
 ### Lower-level helpers (exported from `@nkwib/tapedeck`)
 
-- `computeCassetteHash(request)` — the stable hash used for cassette identity.
+- `computeCassetteHash(request)` — the stable hash used for cassette identity (async, WebCrypto).
 - `loadCassette(hash, dir)` / `saveCassette(hash, dir, cassette)` — direct cassette I/O.
+- `parseCassette(raw, path)` / `serializeCassette(cassette)` — the on-disk codec.
+- `diffCassettes(a, b)` / `formatCassetteDiff(diff)` — semantic cassette diff.
+- `mergeCassetteDirs(src, dest, options?)` — merge cassette directories.
+- `fileCassetteStore()` / `memoryCassetteStore(seed?)` — storage backends.
 - `stableStringify(value)`, `normalizeTools(tools)` — the canonicalization primitives.
 - `CASSETTE_VERSION`, `cassetteFilename(hash)`, `REDACTED`, `DEFAULT_REDACT`.
 

@@ -19,6 +19,8 @@ export {
   loadCassette,
   saveCassette,
   cassetteFilename,
+  parseCassette,
+  serializeCassette,
 } from './cassette.js';
 export type {
   Cassette,
@@ -30,3 +32,15 @@ export type {
 
 export { REDACTED, DEFAULT_REDACT } from './redact.js';
 export type { RedactMatcher } from './redact.js';
+
+export { fileCassetteStore, memoryCassetteStore } from './store.js';
+export type { CassetteStore } from './store.js';
+
+export { withSpan, SPAN_STATUS_OK, SPAN_STATUS_ERROR } from './telemetry.js';
+export type { TapedeckTracer, TapedeckSpan, TapedeckAttributeValue } from './telemetry.js';
+
+export { diffCassettes, formatCassetteDiff } from './diff.js';
+export type { CassetteDiffResult, CassetteFieldDiff } from './diff.js';
+
+export { mergeCassetteDirs } from './merge.js';
+export type { MergeCassettesOptions, MergeCassettesResult } from './merge.js';

@@ -5,7 +5,6 @@
 // params produces a different hash → a cassette miss → a forced re-record. This
 // is what makes a changed prompt fail CI instead of silently replaying stale data.
 
-import { createHash } from 'node:crypto';
 import type {
   LanguageModelV3CallOptions,
   LanguageModelV3FunctionTool,
@@ -74,8 +73,13 @@ function stripDescriptions(value: unknown): unknown {
  * Compute the stable cassette hash for a request. Returns the bare hex digest;
  * callers prefix it with `sha256:` for the cassette's display field and append
  * `.cassette.json` for the on-disk name.
+ *
+ * Uses WebCrypto (`crypto.subtle`), available in Node ≥18, Cloudflare Workers,
+ * and browsers — so the core has no `node:crypto` dependency. Digests are
+ * identical to the previous `node:crypto` implementation; existing cassettes
+ * stay valid.
  */
-export function computeCassetteHash(request: CassetteRequestKey): string {
+export async function computeCassetteHash(request: CassetteRequestKey): Promise<string> {
   const canonical = {
     modelProvider: request.modelProvider,
     modelId: request.modelId,
@@ -85,7 +89,9 @@ export function computeCassetteHash(request: CassetteRequestKey): string {
     temperature: request.temperature,
     topP: request.topP,
   };
-  return createHash('sha256').update(stableStringify(canonical)).digest('hex');
+  const bytes = new TextEncoder().encode(stableStringify(canonical));
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** Build a {@link CassetteRequestKey} from live call options + model identity. */

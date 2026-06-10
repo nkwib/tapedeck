@@ -196,7 +196,7 @@ describe('cassetteMiddleware — secret redaction', () => {
   });
 
   it('throws CassetteSecretError when replaying a leaky cassette', async () => {
-    const hash = computeCassetteHash({
+    const hash = await computeCassetteHash({
       modelProvider: 'mock-provider',
       modelId: 'mock-model-id',
       prompt: PROMPT,
