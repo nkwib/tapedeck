@@ -1,3 +1,7 @@
+<script>
+  import version from '$lib/generated/version.js';
+</script>
+
 <svelte:head>
   <title>tapedeck — record/replay middleware for the Vercel AI SDK</title>
   <meta
@@ -11,7 +15,7 @@
     <div class="hero-copy">
       <span class="badge">
         <span class="dot" aria-hidden="true"></span>
-        v0.1 · MIT · zero runtime deps · vitest-native
+        v{version} · MIT · zero runtime deps · vitest-native
       </span>
       <h1>
         Run your agent test once.<br />

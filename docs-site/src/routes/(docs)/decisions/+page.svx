@@ -1,6 +1,6 @@
 # Decisions
 
-These pages record the load-bearing decisions behind tapedeck v0.1 — the
+These pages record the load-bearing decisions behind tapedeck's first cut — the
 ones that, if you pull on them later, change what the package *is* rather
 than how a function is named.
 
