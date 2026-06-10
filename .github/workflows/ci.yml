@@ -27,6 +27,8 @@ jobs:
           node dist/cli.js --version
           node dist/cli.js --help > /dev/null
           node dist/cli.js ls ./does-not-exist | grep -q "No cassettes"
+      - name: Cross-bundle smoke test (dist entry points)
+        run: pnpm smoke
 
   docs-site:
     runs-on: ubuntu-latest

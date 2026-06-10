@@ -4,6 +4,50 @@ All notable changes to tapedeck are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 semantic versioning once it reaches 1.0.0.
 
+## 0.3.0 — 2026-06-10
+
+### Added
+
+- **Multi-interaction named cassettes.** A named cassette
+  (`withCassette('checkout-flow.json', …)` or `cassetteName`) now stores
+  *every* model call the test makes, keyed by request hash — so a multi-step
+  agent records all its calls into one file and replays each one distinctly,
+  in any order. Previously record mode overwrote the single file on every
+  call and replay served the same response to all of them.
+  - New v2 file shape: `{ version: "tapedeck@0.3.0", recordedAt,
+    interactions: [{ hash, request, response }] }`. Generate and stream
+    interactions can mix in one file.
+  - Each `withCassette` run is one recording session: re-recording a test
+    starts the file fresh, so stale interactions never linger. A static
+    `cassetteName` without `withCassette` upserts by hash instead.
+  - Legacy v1 single-interaction named cassettes still replay with their
+    pre-0.3.0 serve-as-is behaviour. Hash-addressed cassettes are unchanged.
+  - New exports: `MultiCassette`, `CassetteInteraction`, `CassetteFile`,
+    `isMultiCassette`, `MULTI_CASSETTE_VERSION`, plus `diffCassetteFiles` /
+    `formatCassetteFileDiff` (pairs interactions by hash; `tapedeck diff`
+    and `tapedeck ls` understand both formats).
+
+### Fixed
+
+- **`withCassette` had no effect on the published package.** The two dist
+  entry points (`.` and `./vitest`) are separate bundles, each with its own
+  copy of the ambient-context module — so `withCassette` published into one
+  `AsyncLocalStorage` while the middleware read another, silently falling
+  back to `live` mode. The context registry now lives on `globalThis` under
+  `Symbol.for('tapedeck.cassette-context')`, shared across bundles and the
+  ESM/CJS dual-package boundary. A post-build cross-bundle smoke test
+  (`pnpm smoke`, wired into CI) guards the regression.
+
+### Changed
+
+- `parseCassette`, `readCassetteFile`, and `loadCassette` now return the
+  `CassetteFile` union (`Cassette | MultiCassette`); narrow with
+  `isMultiCassette`. Secret detection on replay scans every interaction.
+- Known limitation: interactions are keyed by hash, so two calls with an
+  identical request in one test replay the same response; concurrent calls
+  within a single recording session may race the file write (agent steps are
+  sequential in practice).
+
 ## 0.2.0 — 2026-06-10
 
 The "deferred to 0.2.0" cycle: telemetry, CLI, diff/merge tooling, and an

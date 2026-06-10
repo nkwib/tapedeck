@@ -83,6 +83,8 @@ describe('checkout agent', () => {
 
 Any `cassetteMiddleware` instance active inside the callback picks up the named cassette automatically (via an `AsyncLocalStorage` context) and tears down on exit — no global setup/teardown needed.
 
+Named cassettes are **multi-interaction**: if the agent above makes three model calls, all three are recorded into `checkout-flow.json` keyed by request hash, and each call replays its own response — in any order. Re-recording a test starts the file fresh, so stale interactions from a previous run never linger.
+
 ---
 
 ## Streaming
@@ -127,6 +129,23 @@ Cassettes are pretty-printed JSON, keyed by a stable hash, designed to diff clea
 ```
 
 A one-shot `generateText` produces a `"type": "generate"` response holding the recorded content array, finish reason, and usage instead of chunks.
+
+### Multi-interaction format (v2, named cassettes)
+
+A *named* cassette (from `withCassette` / `cassetteName`) holds every call the test makes, keyed by hash — generate and stream interactions can mix freely:
+
+```json
+{
+  "version": "tapedeck@0.3.0",
+  "recordedAt": "2026-06-10T12:00:00Z",
+  "interactions": [
+    { "hash": "sha256:abc…", "request": { … }, "response": { "type": "generate", … } },
+    { "hash": "sha256:def…", "request": { … }, "response": { "type": "stream", "chunks": [ … ] } }
+  ]
+}
+```
+
+Legacy v1 single-interaction named cassettes still replay (served as-is, pre-0.3.0 behaviour); hash-addressed cassettes always use the single format.
 
 ### Hash algorithm
 
@@ -263,8 +282,9 @@ From `@nkwib/tapedeck/vitest`. Runs `testFn` with `name` pinned and `replay` for
 
 - `computeCassetteHash(request)` — the stable hash used for cassette identity (async, WebCrypto).
 - `loadCassette(hash, dir)` / `saveCassette(hash, dir, cassette)` — direct cassette I/O.
-- `parseCassette(raw, path)` / `serializeCassette(cassette)` — the on-disk codec.
+- `parseCassette(raw, path)` / `serializeCassette(cassette)` — the on-disk codec (`CassetteFile = Cassette | MultiCassette`; narrow with `isMultiCassette`).
 - `diffCassettes(a, b)` / `formatCassetteDiff(diff)` — semantic cassette diff.
+- `diffCassetteFiles(a, b)` / `formatCassetteFileDiff(diff)` — file diff pairing interactions by hash (any format).
 - `mergeCassetteDirs(src, dest, options?)` — merge cassette directories.
 - `fileCassetteStore()` / `memoryCassetteStore(seed?)` — storage backends.
 - `stableStringify(value)`, `normalizeTools(tools)` — the canonicalization primitives.

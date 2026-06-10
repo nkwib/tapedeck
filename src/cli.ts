@@ -13,8 +13,8 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import process from 'node:process';
-import { parseCassette, cassettePathForName } from './cassette.js';
-import { diffCassettes, formatCassetteDiff } from './diff.js';
+import { isMultiCassette, parseCassette, cassettePathForName } from './cassette.js';
+import { diffCassetteFiles, formatCassetteFileDiff } from './diff.js';
 import { CassetteError } from './errors.js';
 import { mergeCassetteDirs } from './merge.js';
 import { fileCassetteStore } from './store.js';
@@ -81,11 +81,21 @@ async function ls(dir = './cassettes'): Promise<number> {
     const raw = await store.read(path);
     if (raw === null) continue;
     try {
-      const c = parseCassette(raw, path);
-      const kind = c.response.type === 'stream' ? 'stream  ' : 'generate';
-      process.stdout.write(
-        `${kind}  ${c.request.modelProvider}/${c.request.modelId}  ${c.recordedAt}  ${name}\n`,
-      );
+      const file = parseCassette(raw, path);
+      if (isMultiCassette(file)) {
+        const first = file.interactions[0];
+        const model = first
+          ? `${first.request.modelProvider}/${first.request.modelId}`
+          : '(empty)';
+        process.stdout.write(
+          `multi ×${file.interactions.length}  ${model}  ${file.recordedAt}  ${name}\n`,
+        );
+      } else {
+        const kind = file.response.type === 'stream' ? 'stream  ' : 'generate';
+        process.stdout.write(
+          `${kind}  ${file.request.modelProvider}/${file.request.modelId}  ${file.recordedAt}  ${name}\n`,
+        );
+      }
     } catch {
       process.stdout.write(`corrupt   ${name}\n`);
     }
@@ -104,8 +114,8 @@ async function diff(aPath?: string, bPath?: string): Promise<number> {
     process.stderr.write(`tapedeck diff: no such file: ${rawA === null ? aPath : bPath}\n`);
     return 2;
   }
-  const result = diffCassettes(parseCassette(rawA, aPath), parseCassette(rawB, bPath));
-  process.stdout.write(`${formatCassetteDiff(result)}\n`);
+  const result = diffCassetteFiles(parseCassette(rawA, aPath), parseCassette(rawB, bPath));
+  process.stdout.write(`${formatCassetteFileDiff(result)}\n`);
   return result.equal ? 0 : 1;
 }
 

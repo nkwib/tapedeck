@@ -16,9 +16,24 @@ export interface CassetteContext {
   mode?: CassetteMode;
   /** Override the cassette directory for this scope. */
   cassetteDir?: string;
+  /**
+   * Record-session marker, created per `withCassette` invocation. The first
+   * write of a session starts the named cassette fresh (no stale interactions
+   * from a previous recording); subsequent writes within the session append.
+   */
+  recordSession?: { written: boolean };
 }
 
-const storage = new AsyncLocalStorage<CassetteContext>();
+// The storage instance is registered on globalThis under a well-known symbol.
+// The package ships dual ESM/CJS with two entry points (`.` and `./vitest`),
+// so the same module can be instantiated more than once in a process (separate
+// bundles, or the ESM/CJS dual-package hazard). `withCassette` publishing into
+// one copy while the middleware reads another would silently disable the
+// ambient context — Symbol.for guarantees every copy shares one instance.
+const STORAGE_KEY = Symbol.for('tapedeck.cassette-context');
+const registry = globalThis as { [STORAGE_KEY]?: AsyncLocalStorage<CassetteContext> };
+const storage: AsyncLocalStorage<CassetteContext> = (registry[STORAGE_KEY] ??=
+  new AsyncLocalStorage<CassetteContext>());
 
 /** Run `fn` with `ctx` active; the context is torn down automatically on return. */
 export function runWithCassetteContext<T>(

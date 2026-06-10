@@ -20,8 +20,11 @@ import type {
 import { CassetteCorruptError } from './errors.js';
 import { fileCassetteStore } from './store.js';
 
-/** Cassette format version. Bumped on any breaking change to the shape below. */
+/** Single-interaction cassette format version (hash-addressed files). */
 export const CASSETTE_VERSION = 'tapedeck@0.1.0';
+
+/** Multi-interaction cassette format version (named files, v2 shape). */
+export const MULTI_CASSETTE_VERSION = 'tapedeck@0.3.0';
 
 /** The request as persisted in a cassette (post-redaction). */
 export interface CassetteRequest {
@@ -59,7 +62,7 @@ export interface StreamCassetteResponse {
 
 export type CassetteResponse = GenerateCassetteResponse | StreamCassetteResponse;
 
-/** A complete cassette as stored on disk. */
+/** A complete single-interaction cassette as stored on disk. */
 export interface Cassette {
   version: string;
   /** Display form of the request hash, e.g. `sha256:abc123…`. */
@@ -67,6 +70,34 @@ export interface Cassette {
   recordedAt: string;
   request: CassetteRequest;
   response: CassetteResponse;
+}
+
+/** One request/response pair inside a multi-interaction cassette. */
+export interface CassetteInteraction {
+  /** Display form of the request hash, e.g. `sha256:abc123…`. */
+  hash: string;
+  request: CassetteRequest;
+  response: CassetteResponse;
+}
+
+/**
+ * A multi-interaction cassette: one named file holding every model call a test
+ * makes, keyed by request hash. This is what a `withCassette` test whose agent
+ * makes several calls records into — each call replays its own interaction.
+ */
+export interface MultiCassette {
+  version: string;
+  /** Timestamp of the last write. */
+  recordedAt: string;
+  interactions: CassetteInteraction[];
+}
+
+/** Any cassette file on disk: single (v1) or multi-interaction (v2). */
+export type CassetteFile = Cassette | MultiCassette;
+
+/** Discriminate a parsed cassette file. */
+export function isMultiCassette(file: CassetteFile): file is MultiCassette {
+  return Array.isArray((file as MultiCassette).interactions);
 }
 
 /** On-disk filename for a hash-addressed cassette. */
@@ -89,17 +120,17 @@ export function cassettePathForName(dir: string, name: string): string {
   return joinPath(dir, name);
 }
 
-/** Serialize a cassette to its on-disk form: pretty-printed, trailing newline. */
-export function serializeCassette(cassette: Cassette): string {
+/** Serialize a cassette file to its on-disk form: pretty-printed, trailing newline. */
+export function serializeCassette(cassette: CassetteFile): string {
   return `${JSON.stringify(cassette, null, 2)}\n`;
 }
 
 /**
- * Parse and validate raw cassette text. Throws {@link CassetteCorruptError} for
- * bad JSON, an unknown version, or a malformed response shape. `path` is only
- * used for error messages.
+ * Parse and validate raw cassette text (single or multi-interaction). Throws
+ * {@link CassetteCorruptError} for bad JSON, an unknown version, or a malformed
+ * response shape. `path` is only used for error messages.
  */
-export function parseCassette(raw: string, path: string): Cassette {
+export function parseCassette(raw: string, path: string): CassetteFile {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -112,44 +143,64 @@ export function parseCassette(raw: string, path: string): Cassette {
   return validateCassette(parsed, path);
 }
 
-/** Persist a cassette to `path` on disk, creating parent directories as needed. */
-export async function writeCassetteFile(path: string, cassette: Cassette): Promise<void> {
+/** Persist a cassette file to `path` on disk, creating parent directories as needed. */
+export async function writeCassetteFile(path: string, cassette: CassetteFile): Promise<void> {
   await fileCassetteStore().write(path, serializeCassette(cassette));
 }
 
 /**
- * Read and validate a cassette from `path` on disk. Returns `null` if the file
- * does not exist (a cassette miss); throws {@link CassetteCorruptError} for
- * anything that exists but is unreadable.
+ * Read and validate a cassette file from `path` on disk. Returns `null` if the
+ * file does not exist (a cassette miss); throws {@link CassetteCorruptError}
+ * for anything that exists but is unreadable.
  */
-export async function readCassetteFile(path: string): Promise<Cassette | null> {
+export async function readCassetteFile(path: string): Promise<CassetteFile | null> {
   const raw = await fileCassetteStore().read(path);
   return raw === null ? null : parseCassette(raw, path);
 }
 
-function validateCassette(parsed: unknown, path: string): Cassette {
+function validateCassette(parsed: unknown, path: string): CassetteFile {
   if (parsed === null || typeof parsed !== 'object') {
     throw new CassetteCorruptError({ cassettePath: path, reason: 'not an object' });
   }
-  const c = parsed as Partial<Cassette>;
+  const c = parsed as Partial<Cassette> & Partial<MultiCassette>;
   if (typeof c.version !== 'string' || !c.version.startsWith('tapedeck@')) {
     throw new CassetteCorruptError({
       cassettePath: path,
       reason: `unknown or missing version (got ${JSON.stringify(c.version)})`,
     });
   }
-  if (c.response === null || typeof c.response !== 'object') {
-    throw new CassetteCorruptError({ cassettePath: path, reason: 'missing response' });
+
+  if (Array.isArray(c.interactions)) {
+    c.interactions.forEach((interaction, i) => {
+      validateResponse(
+        (interaction as Partial<CassetteInteraction>)?.response,
+        path,
+        `interactions[${i}]: `,
+      );
+    });
+    return c as MultiCassette;
   }
-  const type = (c.response as CassetteResponse).type;
+
+  validateResponse(c.response, path, '');
+  return c as Cassette;
+}
+
+function validateResponse(
+  response: unknown,
+  path: string,
+  prefix: string,
+): asserts response is CassetteResponse {
+  if (response === null || response === undefined || typeof response !== 'object') {
+    throw new CassetteCorruptError({ cassettePath: path, reason: `${prefix}missing response` });
+  }
+  const type = (response as CassetteResponse).type;
   if (type !== 'generate' && type !== 'stream') {
     throw new CassetteCorruptError({
       cassettePath: path,
-      reason: `unknown response type ${JSON.stringify(type)}`,
+      reason: `${prefix}unknown response type ${JSON.stringify(type)}`,
     });
   }
-  reviveDates(c.response as CassetteResponse);
-  return c as Cassette;
+  reviveDates(response as CassetteResponse);
 }
 
 /** JSON has no Date type; revive the response metadata timestamp on the way in. */
@@ -167,7 +218,7 @@ function reviveDates(response: CassetteResponse): void {
 }
 
 /** Load a hash-addressed cassette from `dir`. Returns `null` on miss. */
-export function loadCassette(hash: string, dir: string): Promise<Cassette | null> {
+export function loadCassette(hash: string, dir: string): Promise<CassetteFile | null> {
   return readCassetteFile(cassettePathForHash(dir, hash));
 }
 

@@ -34,6 +34,9 @@ export function withCassette<T>(
       cassetteName,
       mode: options.mode ?? 'replay',
       cassetteDir: options.cassetteDir,
+      // Each withCassette run is one recording session: re-recording a test
+      // starts its named cassette fresh instead of accumulating stale entries.
+      recordSession: { written: false },
     },
     testFn,
   );
