@@ -1,6 +1,6 @@
 {
   "name": "@nkwib/tapedeck",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Record/replay middleware for the Vercel AI SDK. Test your agents offline, deterministically, with zero API calls.",
   "license": "MIT",
   "type": "module",
@@ -37,7 +37,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "pnpm build && pnpm test"
+    "prepublishOnly": "pnpm build && pnpm test",
+    "smoke": "node scripts/smoke.mjs"
   },
   "keywords": [
     "vercel-ai-sdk",

@@ -7,6 +7,12 @@
 //   • live    — passthrough; do nothing
 //
 // Both `doGenerate` (one-shot) and `doStream` (streaming) are intercepted.
+//
+// Addressing: hash-addressed cassettes are one file per request (v1 single
+// format). Named cassettes (via `withCassette` / `cassetteName`) are
+// multi-interaction files: every call the test makes is stored in the same
+// file, keyed by request hash, so a multi-step agent records and replays each
+// call distinctly.
 
 import type {
   LanguageModelV3,
@@ -17,10 +23,16 @@ import type {
 } from '@ai-sdk/provider';
 import {
   CASSETTE_VERSION,
+  MULTI_CASSETTE_VERSION,
   type Cassette,
+  type CassetteFile,
+  type CassetteInteraction,
   type CassetteRequest,
+  type CassetteResponse,
+  type MultiCassette,
   cassettePathForHash,
   cassettePathForName,
+  isMultiCassette,
   parseCassette,
   serializeCassette,
 } from './cassette.js';
@@ -51,8 +63,10 @@ export interface CassetteMiddlewareOptions {
    */
   redact?: RedactMatcher[];
   /**
-   * Force a specific cassette filename instead of hash-addressed lookup. Mostly
-   * used internally by `withCassette`; can be set directly for fixed fixtures.
+   * Force a specific cassette filename instead of hash-addressed lookup. The
+   * named file is multi-interaction: every call records/replays its own entry,
+   * keyed by request hash. Mostly used internally by `withCassette`; can be set
+   * directly for fixed fixtures.
    */
   cassetteName?: string;
   /**
@@ -84,6 +98,8 @@ interface Resolved {
   matchers: RedactMatcher[];
   store: CassetteStore;
   tracer: TapedeckTracer | undefined;
+  /** Active recording session (one per `withCassette` run), if any. */
+  recordSession: { written: boolean } | undefined;
 }
 
 function resolveConfig(options: CassetteMiddlewareOptions, defaultStore: CassetteStore): Resolved {
@@ -97,6 +113,7 @@ function resolveConfig(options: CassetteMiddlewareOptions, defaultStore: Cassett
     matchers: [...DEFAULT_REDACT, ...(options.redact ?? [])],
     store: options.store ?? defaultStore,
     tracer: options.tracer,
+    recordSession: ctx?.recordSession,
   };
 }
 
@@ -121,36 +138,120 @@ function buildRequest(params: LanguageModelV3CallOptions, model: LanguageModelV3
 }
 
 /** Throw if a replayed cassette still carries values the matchers would strip. */
-function assertNoSecrets(cassette: Cassette, matchers: RedactMatcher[], path: string): void {
-  const leaks = [
-    ...findUnredacted(cassette.request, matchers).map((p) => `request.${p}`),
-    ...findUnredacted(cassette.response, matchers).map((p) => `response.${p}`),
-  ];
+function assertNoSecrets(file: CassetteFile, matchers: RedactMatcher[], path: string): void {
+  const leaks = isMultiCassette(file)
+    ? file.interactions.flatMap((interaction, i) => [
+        ...findUnredacted(interaction.request, matchers).map(
+          (p) => `interactions[${i}].request.${p}`,
+        ),
+        ...findUnredacted(interaction.response, matchers).map(
+          (p) => `interactions[${i}].response.${p}`,
+        ),
+      ])
+    : [
+        ...findUnredacted(file.request, matchers).map((p) => `request.${p}`),
+        ...findUnredacted(file.response, matchers).map((p) => `response.${p}`),
+      ];
   if (leaks.length > 0) {
     throw new CassetteSecretError({ paths: leaks, cassettePath: path });
   }
 }
 
-/** Read a cassette through the store; `null` is a miss, bad content throws. */
-async function readThroughStore(store: CassetteStore, path: string): Promise<Cassette | null> {
+/** Read a cassette file through the store; `null` is a miss, bad content throws. */
+async function readThroughStore(store: CassetteStore, path: string): Promise<CassetteFile | null> {
   const raw = await store.read(path);
   return raw === null ? null : parseCassette(raw, path);
 }
 
-/** Load + validate a replay cassette or throw the right error. */
+/**
+ * Resolve the recorded response for `hash` in replay mode, or throw the right
+ * error. Multi-interaction cassettes match by hash; legacy single-interaction
+ * named cassettes serve their one response as-is (pre-0.3.0 behaviour).
+ */
 async function loadForReplay(
   cfg: Resolved,
   hash: string,
   path: string,
   span: TapedeckSpan | undefined,
-): Promise<Cassette> {
-  const cassette = await readThroughStore(cfg.store, path);
-  span?.setAttribute('tapedeck.cassette_hit', cassette !== null);
-  if (!cassette) {
+): Promise<CassetteResponse> {
+  const file = await readThroughStore(cfg.store, path);
+  if (!file) {
+    span?.setAttribute('tapedeck.cassette_hit', false);
     throw new CassetteMissError({ hash, cassetteDir: cfg.cassetteDir, cassettePath: path });
   }
-  assertNoSecrets(cassette, cfg.matchers, path);
-  return cassette;
+  assertNoSecrets(file, cfg.matchers, path);
+
+  if (!isMultiCassette(file)) {
+    span?.setAttribute('tapedeck.cassette_hit', true);
+    return file.response;
+  }
+
+  const interaction = file.interactions.find((i) => i.hash === `sha256:${hash}`);
+  span?.setAttribute('tapedeck.cassette_hit', interaction !== undefined);
+  if (!interaction) {
+    throw new CassetteMissError({ hash, cassetteDir: cfg.cassetteDir, cassettePath: path });
+  }
+  return interaction.response;
+}
+
+/** Throw when the recorded response kind doesn't match the intercepted call. */
+function assertResponseType<T extends CassetteResponse['type']>(
+  response: CassetteResponse,
+  expected: T,
+  path: string,
+): asserts response is Extract<CassetteResponse, { type: T }> {
+  if (response.type !== expected) {
+    throw new CassetteCorruptError({
+      cassettePath: path,
+      reason: `expected a '${expected}' cassette but found '${response.type}'`,
+    });
+  }
+}
+
+/**
+ * Persist a recorded interaction. Hash-addressed cassettes are single files;
+ * named cassettes are multi-interaction files upserted by hash. The first
+ * write of a recording session starts the named file fresh, so re-recording a
+ * test never leaves stale interactions behind.
+ */
+async function persistInteraction(
+  cfg: Resolved,
+  hash: string,
+  request: CassetteRequest,
+  response: CassetteResponse,
+  path: string,
+): Promise<void> {
+  const recordedAt = new Date().toISOString();
+
+  if (!cfg.cassetteName) {
+    const cassette: Cassette = {
+      version: CASSETTE_VERSION,
+      hash: `sha256:${hash}`,
+      recordedAt,
+      request,
+      response,
+    };
+    await cfg.store.write(path, serializeCassette(cassette));
+    return;
+  }
+
+  const interaction: CassetteInteraction = { hash: `sha256:${hash}`, request, response };
+  const startFresh = cfg.recordSession !== undefined && !cfg.recordSession.written;
+  const existing = startFresh ? null : await readThroughStore(cfg.store, path);
+
+  const interactions: CassetteInteraction[] = existing
+    ? isMultiCassette(existing)
+      ? [...existing.interactions]
+      : [{ hash: existing.hash, request: existing.request, response: existing.response }]
+    : [];
+
+  const at = interactions.findIndex((i) => i.hash === interaction.hash);
+  if (at >= 0) interactions[at] = interaction;
+  else interactions.push(interaction);
+
+  const file: MultiCassette = { version: MULTI_CASSETTE_VERSION, recordedAt, interactions };
+  await cfg.store.write(path, serializeCassette(file));
+  if (cfg.recordSession) cfg.recordSession.written = true;
 }
 
 /**
@@ -188,32 +289,25 @@ export function cassetteMiddleware(
         spanAttributes(cfg, model, hash, path),
         async (span): Promise<LanguageModelV3GenerateResult> => {
           if (cfg.mode === 'replay') {
-            const cassette = await loadForReplay(cfg, hash, path, span);
-            if (cassette.response.type !== 'generate') {
-              throw new CassetteCorruptError({
-                cassettePath: path,
-                reason: `expected a 'generate' cassette but found '${cassette.response.type}'`,
-              });
-            }
-            const r = cassette.response;
+            const response = await loadForReplay(cfg, hash, path, span);
+            assertResponseType(response, 'generate', path);
             return {
-              content: r.content,
-              finishReason: r.finishReason,
-              usage: r.usage,
-              providerMetadata: r.providerMetadata,
-              warnings: r.warnings ?? [],
-              response: r.metadata,
+              content: response.content,
+              finishReason: response.finishReason,
+              usage: response.usage,
+              providerMetadata: response.providerMetadata,
+              warnings: response.warnings ?? [],
+              response: response.metadata,
             };
           }
 
           // record
           const result = await doGenerate();
-          const cassette: Cassette = {
-            version: CASSETTE_VERSION,
-            hash: `sha256:${hash}`,
-            recordedAt: new Date().toISOString(),
-            request: redact(buildRequest(params, model), cfg.matchers),
-            response: redact(
+          await persistInteraction(
+            cfg,
+            hash,
+            redact(buildRequest(params, model), cfg.matchers),
+            redact(
               {
                 type: 'generate' as const,
                 content: result.content,
@@ -225,8 +319,8 @@ export function cassetteMiddleware(
               },
               cfg.matchers,
             ),
-          };
-          await cfg.store.write(path, serializeCassette(cassette));
+            path,
+          );
           return result;
         },
       );
@@ -246,15 +340,10 @@ export function cassetteMiddleware(
         spanAttributes(cfg, model, hash, path),
         async (span): Promise<LanguageModelV3StreamResult> => {
           if (cfg.mode === 'replay') {
-            const cassette = await loadForReplay(cfg, hash, path, span);
-            if (cassette.response.type !== 'stream') {
-              throw new CassetteCorruptError({
-                cassettePath: path,
-                reason: `expected a 'stream' cassette but found '${cassette.response.type}'`,
-              });
-            }
-            span?.setAttribute('tapedeck.chunk_count', cassette.response.chunks.length);
-            return replayStreamResult(cassette.response.chunks);
+            const response = await loadForReplay(cfg, hash, path, span);
+            assertResponseType(response, 'stream', path);
+            span?.setAttribute('tapedeck.chunk_count', response.chunks.length);
+            return replayStreamResult(response.chunks);
           }
 
           // record: drain the live stream, persist it, then re-serve from the buffer
@@ -262,14 +351,13 @@ export function cassetteMiddleware(
           const result = await doStream();
           const chunks = await collectStreamChunks(result.stream);
           const response = redact({ type: 'stream' as const, chunks }, cfg.matchers);
-          const cassette: Cassette = {
-            version: CASSETTE_VERSION,
-            hash: `sha256:${hash}`,
-            recordedAt: new Date().toISOString(),
-            request: redact(buildRequest(params, model), cfg.matchers),
+          await persistInteraction(
+            cfg,
+            hash,
+            redact(buildRequest(params, model), cfg.matchers),
             response,
-          };
-          await cfg.store.write(path, serializeCassette(cassette));
+            path,
+          );
           span?.setAttribute('tapedeck.chunk_count', chunks.length);
           // Replay the (redacted) recorded chunks so record and replay stay identical.
           return {

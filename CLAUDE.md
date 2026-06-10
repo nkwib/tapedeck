@@ -46,7 +46,11 @@ describe('my agent', () => {
 });
 ```
 
-## Cassette Format (v1)
+## Cassette Format (v1 single / v2 multi)
+
+Hash-addressed cassettes are v1 single files (below). Named cassettes are v2
+multi-interaction files: `{ version: "tapedeck@0.3.0", recordedAt,
+interactions: [{ hash, request, response }] }`, upserted by hash.
 
 ```json
 {
@@ -140,11 +144,19 @@ This pairs the two packages: guard in production with ToolRoute, replay in CI wi
 - Published as **`@nkwib/tapedeck`** — the unscoped `tapedeck` name on npm is
   owned by an unrelated 2022 package. The CLI bin is still `tapedeck`.
 
-## Deferred to 0.3.0
+## Milestone 0.3.0 — shipped
+
+- Multi-interaction named cassettes (v2 format `tapedeck@0.3.0`): a named
+  cassette stores every model call of a test keyed by request hash
+  (`interactions: [{ hash, request, response }]`), so multi-step agents record
+  and replay each call distinctly. `withCassette` runs are recording sessions
+  (first write starts the file fresh); static `cassetteName` upserts. v1 single
+  named cassettes keep legacy serve-as-is replay; hash-addressed files unchanged.
+- `diffCassetteFiles` / `formatCassetteFileDiff` pair interactions by hash;
+  CLI `ls`/`diff` understand both formats.
+
+## Deferred to 0.4.0
 
 - Deployed Cloudflare Workers smoke test in CI (edge support is designed-for, not CI-verified).
-- Multi-interaction named cassettes: a `withCassette` test whose agent makes
-  several model calls currently overwrites the single named file in record mode
-  and serves the same response to every call in replay. Needs a v2 format that
-  stores an array of interactions keyed by hash.
 - Adopt in PRCompass.
+- Interaction-level merge for multi-cassettes (merge is file-level today).
