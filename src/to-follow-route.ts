@@ -82,7 +82,7 @@ export interface ToFollowRouteResult {
  * Register it once in a setup file:
  * ```typescript
  * import { expect } from 'vitest';
- * import { toFollowRoute } from 'tapedeck/vitest';
+ * import { toFollowRoute } from '@nkwib/tapedeck/vitest';
  * expect.extend({ toFollowRoute });
  * ```
  */

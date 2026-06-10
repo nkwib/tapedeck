@@ -18,7 +18,7 @@ Wrap your AI SDK model in one line. Run your agent test once against the live AP
 
 ```typescript
 import { wrapLanguageModel } from 'ai';
-import { cassetteMiddleware } from 'tapedeck';
+import { cassetteMiddleware } from '@nkwib/tapedeck';
 
 const model = wrapLanguageModel({
   model: openai('gpt-4o'),
@@ -33,7 +33,7 @@ const model = wrapLanguageModel({
 ## Vitest Helper
 
 ```typescript
-import { withCassette } from 'tapedeck/vitest';
+import { withCassette } from '@nkwib/tapedeck/vitest';
 import { describe, it, expect } from 'vitest';
 
 describe('my agent', () => {
@@ -101,10 +101,10 @@ Stable hash of: `{modelProvider, modelId, messages, toolSchemas, maxTokens, temp
 
 ## ToolRoute Cross-Sell
 
-`tapedeck/vitest` exports `toFollowRoute()` matcher when `toolroute` is installed:
+`@nkwib/tapedeck/vitest` exports `toFollowRoute()` matcher when `toolroute` is installed:
 
 ```typescript
-import { toFollowRoute } from 'tapedeck/vitest';
+import { toFollowRoute } from '@nkwib/tapedeck/vitest';
 expect(result.steps).toFollowRoute(router);
 ```
 
@@ -135,6 +135,10 @@ This pairs the two packages: guard in production with ToolRoute, replay in CI wi
   WebCrypto hashing (`computeCassetteHash` is async), no static `node:fs`/`node:path`/`node:crypto`.
   Only `node:async_hooks` remains (Workers `nodejs_compat`). tsup `removeNodeProtocol: false`
   keeps `node:` prefixes in the bundle.
+- `toFollowRoute()` ToolRoute matcher in `@nkwib/tapedeck/vitest` (`src/to-follow-route.ts`),
+  structurally typed against toolroute's Router — no dependency either way.
+- Published as **`@nkwib/tapedeck`** — the unscoped `tapedeck` name on npm is
+  owned by an unrelated 2022 package. The CLI bin is still `tapedeck`.
 
 ## Deferred to 0.3.0
 
@@ -143,5 +147,4 @@ This pairs the two packages: guard in production with ToolRoute, replay in CI wi
   several model calls currently overwrites the single named file in record mode
   and serves the same response to every call in replay. Needs a v2 format that
   stores an array of interactions keyed by hash.
-- `toFollowRoute()` ToolRoute matcher in `tapedeck/vitest`.
 - Adopt in PRCompass.

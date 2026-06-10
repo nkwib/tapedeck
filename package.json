@@ -9,7 +9,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "tapedeck": "./dist/cli.js"
+    "tapedeck": "dist/cli.js"
   },
   "exports": {
     ".": {
@@ -53,7 +53,7 @@
   "homepage": "https://github.com/nkwib/tapedeck#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nkwib/tapedeck.git"
+    "url": "git+https://github.com/nkwib/tapedeck.git"
   },
   "bugs": {
     "url": "https://github.com/nkwib/tapedeck/issues"

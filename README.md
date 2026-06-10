@@ -191,7 +191,7 @@ Cassette I/O goes through a `CassetteStore` (`read`/`write`/`list`). The
 default is the filesystem; pass your own for everything else:
 
 ```typescript
-import { cassetteMiddleware, memoryCassetteStore } from 'tapedeck';
+import { cassetteMiddleware, memoryCassetteStore } from '@nkwib/tapedeck';
 
 // Tests / edge: bundle cassettes with the worker, no fs needed.
 const store = memoryCassetteStore({
@@ -289,7 +289,7 @@ If you also use [`toolroute`](https://github.com/nkwib/toolroute), pair the two:
 
 ```typescript
 import { expect } from 'vitest';
-import { toFollowRoute, withCassette } from 'tapedeck/vitest';
+import { toFollowRoute, withCassette } from '@nkwib/tapedeck/vitest';
 
 expect.extend({ toFollowRoute });
 
