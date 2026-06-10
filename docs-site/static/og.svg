@@ -2,7 +2,7 @@
   <rect width="1200" height="630" fill="#0a0a0b" />
   <rect x="40" y="40" width="1120" height="550" rx="20" fill="#131317" stroke="#2e2e35" stroke-width="2" />
 
-  <text x="100" y="160" font-family="JetBrains Mono, monospace" font-size="28" fill="#fbbf24" letter-spacing="0.18em">TAPEDECK · v0.1</text>
+  <text x="100" y="160" font-family="JetBrains Mono, monospace" font-size="28" fill="#fbbf24" letter-spacing="0.18em">TAPEDECK</text>
   <text x="100" y="260" font-family="Inter, sans-serif" font-size="76" font-weight="700" fill="#f4f4f5" letter-spacing="-0.025em">Record once.</text>
   <text x="100" y="340" font-family="Inter, sans-serif" font-size="76" font-weight="700" fill="#fbbf24" letter-spacing="-0.025em">Replay forever.</text>
   <text x="100" y="400" font-family="Inter, sans-serif" font-size="28" fill="#a1a1aa">Vercel AI SDK companion · record/replay middleware · deterministic CI</text>

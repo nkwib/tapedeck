@@ -64,7 +64,7 @@ describe('checkout agent', () => {
 // Change the prompt or a tool schema and the hash changes — replay
 // misses and the test fails loudly:
 //   CassetteMissError: no cassette for sha256:abc123… in ./cassettes
-// Re-record, commit the new cassette, move on. (tapedeck@0.1.0+ai@6)`;
+// Re-record, commit the new cassette, move on.`;
 
 const diffCode = `- const result = await runCheckoutAgent({
 -   model: openai('gpt-4o'),
