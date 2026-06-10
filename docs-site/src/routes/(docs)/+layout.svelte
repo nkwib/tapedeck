@@ -17,8 +17,11 @@
         { href: '/docs#hash', label: 'Hash algorithm' },
         { href: '/docs#redaction', label: 'Secret redaction' },
         { href: '/docs#vitest', label: 'Vitest helper' },
+        { href: '/docs#cli', label: 'CLI' },
+        { href: '/docs#telemetry', label: 'Telemetry' },
+        { href: '/docs#storage', label: 'Storage & edge' },
         { href: '/docs#errors', label: 'Errors' },
-        { href: '/docs#non-goals', label: 'Non-goals' }
+        { href: '/docs#roadmap', label: 'Roadmap' }
       ]
     },
     {

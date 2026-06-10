@@ -109,13 +109,18 @@ that intercepts both `doGenerate` (one-shot) and `doStream` (streaming).
 | `mode` | `'record' \| 'replay' \| 'live'` | `'live'` | Operating mode. |
 | `cassetteDir` | `string` | `'./cassettes'` | Directory cassettes are read from / written to. |
 | `redact` | `(string \| RegExp)[]` | `[]` | Extra key matchers, merged with the built-in defaults. |
-| `cassetteName` | `string` | — | Force a specific filename instead of hash-addressing. Mostly used internally by `withCassette`. |
+| `cassetteName` | `string` | — | Force a specific filename instead of hash-addressing. Named cassettes are multi-interaction (keyed by hash). Mostly used internally by `withCassette`. |
+| `store` | `CassetteStore` | filesystem | Storage backend. Use `memoryCassetteStore()` on edge runtimes. |
+| `tracer` | `TapedeckTracer` | — | OTel-compatible tracer; emits `tapedeck.generate` / `tapedeck.stream` spans. |
 
-tapedeck also exports lower-level primitives for direct use:
-`computeCassetteHash(request)`, `loadCassette(hash, dir)` /
-`saveCassette(hash, dir, cassette)`, `stableStringify(value)`,
-`normalizeTools(tools)`, and the constants `CASSETTE_VERSION`,
-`cassetteFilename(hash)`, `REDACTED`, `DEFAULT_REDACT`.
+tapedeck also exports lower-level primitives for direct use — hashing
+(`computeCassetteHash`, `stableStringify`, `normalizeTools`), cassette I/O
+(`loadCassette` / `saveCassette`, `parseCassette` / `serializeCassette`,
+`isMultiCassette`), diff/merge (`diffCassettes`, `diffCassetteFiles`,
+`mergeCassetteDirs`), storage (`fileCassetteStore`, `memoryCassetteStore`),
+telemetry (`withSpan`), and the constants `CASSETTE_VERSION`,
+`MULTI_CASSETTE_VERSION`, `cassetteFilename(hash)`, `REDACTED`,
+`DEFAULT_REDACT`. See the [API reference](/api) for all of them.
 
 <h2 id="streaming">Streaming</h2>
 
@@ -164,6 +169,24 @@ cleanly in PRs:
 
 A one-shot `generateText` produces a `"type": "generate"` response holding the
 recorded content array, finish reason, and usage instead of chunks.
+
+*Named* cassettes (from `withCassette` / `cassetteName`) use the v2
+multi-interaction format: one file holding every call the test makes, keyed by
+hash — generate and stream interactions can mix freely:
+
+```json
+{
+  "version": "tapedeck@0.3.0",
+  "recordedAt": "2026-06-10T12:00:00Z",
+  "interactions": [
+    { "hash": "sha256:abc…", "request": { }, "response": { "type": "generate" } },
+    { "hash": "sha256:def…", "request": { }, "response": { "type": "stream", "chunks": [ ] } }
+  ]
+}
+```
+
+Legacy v1 single-interaction named cassettes still replay (served as-is);
+hash-addressed cassettes always use the single format.
 
 <h2 id="hash">Hash algorithm</h2>
 
@@ -229,6 +252,58 @@ exit, so there is no global setup/teardown to wire up. Pass `options.mode` to
 override the forced `replay`, or `options.cassetteDir` to point at a different
 directory.
 
+The named cassette is **multi-interaction**: if the agent above makes three
+model calls, all three are recorded into `checkout-flow.json` keyed by request
+hash, and each call replays its own response — in any order. Re-recording a
+test starts the file fresh, so stale interactions never linger.
+
+`@nkwib/tapedeck/vitest` also exports the `toFollowRoute()` matcher: pair with
+[toolroute](https://github.com/nkwib/toolroute) to assert that the replayed
+trajectory only makes transitions your router allows
+(`expect(result.steps).toFollowRoute(router)` after
+`expect.extend(&lbrace; toFollowRoute &rbrace;)`).
+
+<h2 id="cli">CLI</h2>
+
+The package ships a `tapedeck` bin for the record/replay workflow:
+
+```bash
+npx tapedeck record ./scripts/demo.mjs    # run with CASSETTE_MODE=record
+npx tapedeck replay ./scripts/demo.mjs    # run with CASSETTE_MODE=replay
+npx tapedeck record pnpm test             # non-file args run as commands on PATH
+
+npx tapedeck ls ./cassettes               # kind, model, recordedAt per cassette
+npx tapedeck diff a.json b.json           # semantic field-level diff (exit 1 on difference)
+npx tapedeck merge ./from-ci ./cassettes  # merge directories; --force overwrites conflicts
+```
+
+`diff` pinpoints *which fields* diverged and ignores `recordedAt`; `merge`
+skips identical files and fails on conflicts unless `--force` is passed.
+
+<h2 id="telemetry">Telemetry</h2>
+
+Pass any OTel-compatible tracer and every record/replay emits a span — typed
+structurally, so tapedeck keeps zero runtime dependencies:
+
+```ts
+import { trace } from '@opentelemetry/api';
+
+cassetteMiddleware({ mode: 'replay', tracer: trace.getTracer('tapedeck') });
+```
+
+Spans (`tapedeck.generate` / `tapedeck.stream`) carry mode, hash, cassette
+path, model, hit/miss, and chunk-count attributes; a miss records the
+exception with an error status, so a failing CI replay shows up in traces.
+
+<h2 id="storage">Storage &amp; edge runtimes</h2>
+
+Cassette I/O goes through a `CassetteStore` (`read`/`write`/`list`). The
+default is the filesystem (loaded lazily); pass `memoryCassetteStore()` — or a
+KV/R2-backed store — on edge runtimes. The core never imports `node:fs`,
+`node:path`, or `node:crypto` statically; the one remaining Node builtin is
+`node:async_hooks`, which Cloudflare Workers provides under the
+`nodejs_compat` flag. See [Compatibility](/compatibility) for the caveats.
+
 <h2 id="errors">Errors</h2>
 
 | Error | When |
@@ -241,21 +316,14 @@ directory.
 All extend `CassetteError`, so you can catch the whole family with one
 `instanceof CassetteError`.
 
-<h2 id="non-goals">Non-goals</h2>
+<h2 id="roadmap">Roadmap</h2>
 
-Things explicitly **not in v1**, deferred to a future release:
+Everything deferred from the first cut — OTel spans, the CLI, diff/merge
+tooling, the edge-safe core, the `toFollowRoute()` matcher, and
+multi-interaction named cassettes — has shipped as of 0.3.0. Still ahead:
 
-- **OTel span emission** — observability is out of scope for the first cut; the
-  cassette diff in a PR is the calling card.
-- **`npx tapedeck record <script>` CLI** — recording is driven through your test
-  runner and the `CASSETTE_MODE` env var in v1, not a standalone command.
-- **Cassette diff / merge tooling** — cassettes are plain JSON that diff cleanly
-  in PRs already; bespoke tooling can wait.
-- **Cloudflare Workers / Edge runtime validation** — v1 targets Node test
-  runners; Edge support is unverified.
-- **`toFollowRoute()` matcher** — the planned [toolroute](https://github.com/nkwib/toolroute)
-  cross-sell that asserts trajectories from `@nkwib/tapedeck/vitest` is not shipped
-  yet.
+- **Deployed Cloudflare Workers smoke test in CI** — edge support is
+  designed-for, not yet CI-verified.
+- **Interaction-level merge** for multi-cassettes (merge is file-level today).
 
-See the [v2 deferred index](https://github.com/nkwib/tapedeck/blob/main/issues/999-v2-deferred.md)
-for the canonical list.
+See the [changelog](/changelog) for the full release history.

@@ -7,6 +7,68 @@ All notable changes to tapedeck are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 semantic versioning once it reaches 1.0.0.
 
+## 0.3.0 — 2026-06-10
+
+### Added
+
+- **Multi-interaction named cassettes.** A named cassette
+  (`withCassette('checkout-flow.json', …)` or `cassetteName`) now stores
+  *every* model call the test makes, keyed by request hash — a multi-step
+  agent records all its calls into one file and replays each one
+  distinctly, in any order. New v2 file shape:
+  `&lbrace; version: "tapedeck@0.3.0", recordedAt, interactions: [&lbrace; hash, request, response &rbrace;] &rbrace;`.
+  Each `withCassette` run is one recording session (re-recording starts the
+  file fresh); a static `cassetteName` upserts by hash. Legacy v1 named
+  cassettes keep their serve-as-is replay; hash-addressed files unchanged.
+- New exports: `MultiCassette`, `CassetteInteraction`, `CassetteFile`,
+  `isMultiCassette`, `MULTI_CASSETTE_VERSION`, `diffCassetteFiles` /
+  `formatCassetteFileDiff`. `tapedeck diff` and `tapedeck ls` understand
+  both formats.
+
+### Fixed
+
+- **`withCassette` had no effect on the published package.** The two dist
+  entry points are separate bundles, each with its own copy of the
+  ambient-context module — `withCassette` published into one
+  `AsyncLocalStorage` while the middleware read another, silently falling
+  back to `live` mode. The context registry now lives on `globalThis`
+  under `Symbol.for('tapedeck.cassette-context')`, and a post-build
+  cross-bundle smoke test in CI guards the regression.
+
+## 0.2.0 — 2026-06-10
+
+Published as **`@nkwib/tapedeck`** from this release — the unscoped
+`tapedeck` name on npm belongs to an unrelated 2022 package. The CLI bin
+is still `tapedeck`.
+
+### Added
+
+- **`tapedeck` CLI** (`npx tapedeck …`): `record` / `replay` a script with
+  `CASSETTE_MODE` set, `ls` cassettes, semantic `diff` (exit 1 on
+  difference), and `merge` with conflict reporting (`--force` overwrites).
+- **OTel span emission.** `cassetteMiddleware(&lbrace; tracer &rbrace;)` accepts any
+  OpenTelemetry-compatible tracer, typed structurally — still zero runtime
+  dependencies. Spans carry mode, hash, cassette path, model, hit/miss,
+  and chunk-count attributes; misses record the exception.
+- **Pluggable storage.** `cassetteMiddleware(&lbrace; store &rbrace;)` takes a
+  `CassetteStore`; ships with `fileCassetteStore()` (default) and
+  `memoryCassetteStore()` for tests and edge runtimes.
+- **`toFollowRoute()` matcher** in `@nkwib/tapedeck/vitest` — asserts a
+  tool-call trajectory follows a
+  [toolroute](https://github.com/nkwib/toolroute) router; structurally
+  typed, no dependency either way.
+- Diff/merge as library functions: `diffCassettes`, `formatCassetteDiff`,
+  `mergeCassetteDirs`, plus `parseCassette` / `serializeCassette`.
+
+### Changed
+
+- **Edge-safe core.** No static `node:fs` / `node:path` / `node:crypto`:
+  hashing uses WebCrypto (identical digests) and the file store loads
+  `node:fs` lazily. Only `node:async_hooks` remains (Cloudflare Workers
+  `nodejs_compat` flag).
+- **`computeCassetteHash` is now async** (returns `Promise<string>`).
+  Digests unchanged; existing cassettes stay valid.
+
 ## 0.1.0 — 2026-06-10
 
 Initial public release. Treated as a pre-1.0 calling card; a 1.0.0 cut
