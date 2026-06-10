@@ -285,7 +285,21 @@ When a prompt or tool schema changes, the hash changes, replay misses, and CI fa
 
 ## ToolRoute cross-sell
 
-If you also use [`toolroute`](https://github.com/nkwib/toolroute), pair the two: guard tool trajectories in production with ToolRoute, replay them in CI with tapedeck. A `toFollowRoute()` matcher integration is planned for a future release.
+If you also use [`toolroute`](https://github.com/nkwib/toolroute), pair the two: guard tool trajectories in production with ToolRoute, replay them in CI with tapedeck, and assert the trajectory with `toFollowRoute()`:
+
+```typescript
+import { expect } from 'vitest';
+import { toFollowRoute, withCassette } from 'tapedeck/vitest';
+
+expect.extend({ toFollowRoute });
+
+await withCassette('checkout-flow.json', async () => {
+  const result = await runAgent({ prompt: 'buy a t-shirt' });
+  expect(result.steps).toFollowRoute(router); // every transition legal per the router
+});
+```
+
+The matcher accepts AI SDK `result.steps`, a flat `{ toolName }[]` list, or bare tool-name strings, and pinpoints the first illegal transition (`call 3 ('fetch' after 'fetch') is illegal; legal next: [summarize]`). The router argument is typed structurally (`{ adjacency, routerVersion }`), so tapedeck works with any toolroute version — and without toolroute installed at all.
 
 ---
 
