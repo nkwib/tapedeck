@@ -5,11 +5,21 @@ A short reference for the vocabulary used across the docs and the
 
 ### cassette
 
-A pretty-printed JSON file holding one recorded model interaction: the
+A pretty-printed JSON file holding recorded model interactions — the
 canonicalized `request`, the recorded `response` (a `generate` content
 array or a `stream` chunk array), and metadata (`version`, `hash`,
-`recordedAt`). Cassettes are hash-addressed, designed to diff cleanly in
-PRs, and committed alongside the tests that depend on them.
+`recordedAt`). Hash-addressed cassettes hold one interaction; named
+cassettes are [multi-interaction](#multi-interaction-cassette). Either
+way they diff cleanly in PRs and are committed alongside the tests that
+depend on them.
+
+<h3 id="cassette-store">cassette store</h3>
+
+The storage backend cassette I/O goes through
+(`read` / `write` / `list`). The default is the filesystem, loaded
+lazily; `memoryCassetteStore()` keeps cassettes in a `Map` for tests and
+edge runtimes, and the same three-method interface fits KV/R2 on
+Cloudflare Workers.
 
 ### CassetteError family
 
@@ -49,6 +59,15 @@ A `replay`-mode lookup that finds no cassette matching the request
 back to the network. That is deliberate: a changed prompt or tool schema
 should fail CI loudly and force a re-record, not silently replay stale
 data or make a live call. See [Decisions](/decisions).
+
+<h3 id="multi-interaction-cassette">multi-interaction cassette</h3>
+
+The v2 format used by *named* cassettes (`withCassette` /
+`cassetteName`): one file holding every model call a test makes, as
+`interactions: &lbrace; hash, request, response &rbrace;[]`. Each call records and
+replays its own entry keyed by [hash](#hash), in any order. A
+`withCassette` run is one recording session — re-recording starts the
+file fresh, so stale interactions never linger.
 
 <h3 id="normalization">normalization</h3>
 
