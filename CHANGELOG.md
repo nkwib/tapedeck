@@ -10,6 +10,11 @@ The "deferred to 0.2.0" cycle: telemetry, CLI, diff/merge tooling, and an
 edge-safe core. Cassette format and hashes are unchanged — every 0.1.0
 cassette replays as-is.
 
+> **Package renamed to `@nkwib/tapedeck`** as of this release — the unscoped
+> `tapedeck` name on npm belongs to an unrelated 2022 package. Update imports
+> (`tapedeck` → `@nkwib/tapedeck`, `tapedeck/vitest` → `@nkwib/tapedeck/vitest`);
+> the CLI bin is still `tapedeck`.
+
 ### Added
 
 - **`tapedeck` CLI** (`npx tapedeck …`):
