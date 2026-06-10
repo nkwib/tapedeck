@@ -1,0 +1,55 @@
+Build the complete tapedeck implementation for the Vercel AI SDK. Read CLAUDE.md first for the full architecture.
+
+Requirements:
+
+1. Create `src/middleware.ts`:
+   - `cassetteMiddleware(options: CassetteMiddlewareOptions)` that returns an AI SDK LanguageModelV1Middleware
+   - Modes: 'record' | 'replay' | 'live'
+   - Record mode: intercepts the wrapped model's doGenerate call, serializes the full request+response to a JSON cassette file keyed by stable hash
+   - Replay mode: looks up cassette by hash, returns the recorded response as a real stream (chunk arrays replayed as stream parts)
+   - Live mode: passthrough, no recording
+   - Hash: stable hash of {modelProvider, modelId, messages, toolSchemas, maxTokens, temperature, topP}
+   - Secret redaction: configurable string[] | RegExp[] matchers, applied at record time
+   - Cassette format version: 'tapedeck@0.1.0'
+
+2. Create `src/errors.ts`:
+   - CassetteMissError, CassetteSecretError, CassetteCorruptError, CassetteModeError
+   - Each extends Error with relevant metadata fields
+
+3. Create `src/hash.ts`:
+   - `computeCassetteHash(request)` — stable hash function
+   - Normalize tool schemas (sorted keys, strip descriptions)
+
+4. Create `src/cassette.ts`:
+   - `loadCassette(hash, dir)` and `saveCassette(hash, dir, data)`
+   - File naming: `{hash}.cassette.json`
+   - JSON serialization with pretty-print for diffability
+
+5. Create `src/with-cassette.ts`:
+   - `withCassette(cassetteName, testFn, options?)` — vitest helper
+   - Sets up cassetteMiddleware in replay mode for the test
+   - Cleans up after test
+   - Options: cassetteDir, mode override
+
+6. Create `src/stream-replay.ts`:
+   - Replay recorded chunks as a real AI SDK stream
+   - Handle text-delta, tool-call, tool-call-delta, finish, error chunk types
+
+7. Create `test/middleware.test.ts`:
+   - Test record mode writes a cassette
+   - Test replay mode returns recorded response
+   - Test miss=throw in replay mode
+   - Test live mode passthrough
+   - Test secret redaction
+   - Use MockLanguageModelV2 from 'ai' for test doubles
+
+8. Update `src/index.ts` and `src/vitest.ts` to export everything correctly
+
+9. Add a comprehensive README.md with quickstart, examples, comparison table, and API reference
+
+Constraints:
+- Zero runtime dependencies except 'ai' peer
+- TypeScript strict mode
+- No live API calls in tests
+- Use vitest for testing
+- Build with tsup (already configured)

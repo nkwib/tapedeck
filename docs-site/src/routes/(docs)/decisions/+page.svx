@@ -1,0 +1,47 @@
+# Decisions
+
+These pages record the load-bearing decisions behind tapedeck v0.1 — the
+ones that, if you pull on them later, change what the package *is* rather
+than how a function is named.
+
+tapedeck is record/replay middleware for the
+[Vercel AI SDK](https://sdk.vercel.ai): wrap your model once, run your
+agent test against the live API a single time, commit the cassette, and
+every CI run after that is deterministic, offline, free, and
+stream-accurate. Four choices make that work, and each one closed off an
+obvious alternative. The pages below explain why.
+
+They are short on purpose. If a v2 ticket starts arguing with something
+cut here, the discussion belongs on its decision page, not on the v1
+ticket.
+
+## Pages
+
+- [**Middleware, not a proxy**](/decisions/middleware-not-proxy) — why
+  tapedeck lives at the `wrapLanguageModel` layer instead of an HTTP
+  proxy (nock/Polly) or a hand-written `MockLanguageModelV3`. The
+  flagship decision: normalize at the SDK abstraction, survive
+  wire-format changes, replay streams as real streams, ship no infra.
+- [**A miss throws in CI**](/decisions/miss-throws-in-ci) — why a
+  `replay` cache miss raises `CassetteMissError` instead of silently
+  falling back to the live API. A changed prompt or tool schema changes
+  the hash, misses, and fails the build loudly — no stale fixtures.
+- [**Redact at record time**](/decisions/redact-at-record-time) — why
+  secret redaction happens when the cassette is written, not when it's
+  read, so secrets never reach disk — and why a committed cassette that
+  still carries a redactable value throws `CassetteSecretError`.
+- [**Vercel AI SDK coupling**](/decisions/vercel-ai-sdk-coupling) — why
+  tapedeck binds tightly to the AI SDK (model spec v3) and is *not* a
+  generic recorder, what `COMPATIBILITY.md` and the pinned peer range
+  buy us, and how the cassette `version` field surfaces drift.
+
+## The shape of the bet
+
+Every one of these decisions is the same bet made four times: stand at
+the SDK's own abstraction boundary and refuse to step below it. Below
+that line is the provider wire format — where proxies live and break;
+above it is your application code, which should not know whether a
+response came from the network or from disk. tapedeck sits exactly on
+the line, which is the only place all four guarantees —
+provider-agnostic, stream-native, deterministic, secret-safe — hold at
+once.

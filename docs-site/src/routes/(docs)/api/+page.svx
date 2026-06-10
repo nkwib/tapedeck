@@ -1,0 +1,318 @@
+<script>
+  import ApiSignature from '$lib/components/ApiSignature.svelte';
+  import Callout from '$lib/components/Callout.svelte';
+</script>
+
+# API
+
+Every public symbol exported from `tapedeck`. Source of truth:
+[`src/index.ts`](https://github.com/nkwib/tapedeck/blob/main/src/index.ts).
+
+| Export | Kind | What it does |
+|---|---|---|
+| [`cassetteMiddleware`](#cassetteMiddleware) | function | Record/replay/live middleware for `wrapLanguageModel`. |
+| [`withCassette`](#withCassette) | function | Vitest helper: pin a test to a named cassette. |
+| [`CassetteError`](#CassetteError) | class | Base class for the whole error family. |
+| [`CassetteMissError`](#CassetteMissError) | class | Replay miss — no cassette matched the hash. |
+| [`CassetteSecretError`](#CassetteSecretError) | class | A replayed cassette still holds unredacted secrets. |
+| [`CassetteCorruptError`](#CassetteCorruptError) | class | Unreadable cassette: bad JSON, version, or shape. |
+| [`CassetteModeError`](#CassetteModeError) | class | Invalid mode string. |
+| [`computeCassetteHash`](#computeCassetteHash) | function | The stable hash used for cassette identity. |
+| [`loadCassette`](#loadCassette) | function | Read a hash-addressed cassette from a directory. |
+| [`saveCassette`](#saveCassette) | function | Write a hash-addressed cassette into a directory. |
+| [`stableStringify`](#stableStringify) | function | Deterministic, key-sorted JSON. |
+| [`normalizeTools`](#normalizeTools) | function | Strip tool descriptions before hashing. |
+| [`cassetteFilename`](#cassetteFilename) | function | On-disk filename for a hash. |
+| [`CASSETTE_VERSION`](#CASSETTE_VERSION) | const | Current cassette format version. |
+| [`REDACTED`](#REDACTED) | const | Placeholder written in place of a secret. |
+| [`DEFAULT_REDACT`](#DEFAULT_REDACT) | const | Built-in key matchers. |
+
+---
+
+<ApiSignature
+  id="cassetteMiddleware"
+  name="cassetteMiddleware"
+  kind="function"
+  signature={`function cassetteMiddleware(options?: CassetteMiddlewareOptions): LanguageModelV3Middleware`}
+/>
+
+Returns an AI SDK `LanguageModelV3Middleware` for use with `wrapLanguageModel`.
+Intercepts both `doGenerate` (one-shot) and `doStream` (streaming). Behaviour is
+driven by `mode` — typically read from an env var, so you switch between recording
+and replaying with no other code changes. A bad static `mode` throws
+[`CassetteModeError`](#CassetteModeError) eagerly, even before the first call.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `mode` | `'record' \| 'replay' \| 'live'` | `'live'` | Operating mode. `record` calls the real model and persists request + response; `replay` serves a cassette by hash and throws on a miss; `live` is passthrough. |
+| `cassetteDir` | `string` | `'./cassettes'` | Directory cassettes are read from / written to. |
+| `redact` | `(string \| RegExp)[]` | `[]` | Extra key matchers, merged with [`DEFAULT_REDACT`](#DEFAULT_REDACT). Strings match field/header names case-insensitively; RegExps test the raw key. |
+| `cassetteName` | `string` | &mdash; | Force a specific filename instead of hash-addressed lookup. Mostly used internally by [`withCassette`](#withCassette); set it for fixed fixtures. |
+
+```ts
+import { openai } from '@ai-sdk/openai';
+import { generateText, wrapLanguageModel } from 'ai';
+import { cassetteMiddleware } from 'tapedeck';
+
+const model = wrapLanguageModel({
+  model: openai('gpt-4o'),
+  middleware: cassetteMiddleware({
+    mode: process.env.CASSETTE_MODE ?? 'live', // record | replay | live
+    cassetteDir: './cassettes',
+    redact: ['apiKey', 'authorization', /token/i],
+  }),
+});
+
+const { text } = await generateText({ model, prompt: 'Say hi' });
+```
+
+When the ambient [`withCassette`](#withCassette) context is active, its `mode`,
+`cassetteDir`, and `cassetteName` take precedence over the values passed here.
+
+<Callout kind="info" title="Streaming is first-class">
+  In <code>record</code> mode tapedeck drains the live stream, persists the
+  ordered parts, then re-serves them so your code still receives the response. In
+  <code>replay</code> mode the parts are replayed as a genuine
+  <code>ReadableStream</code> via the SDK's own
+  <code>simulateReadableStream</code>.
+</Callout>
+
+<ApiSignature
+  id="withCassette"
+  name="withCassette"
+  kind="function"
+  signature={`function withCassette<T>(
+  cassetteName: string,
+  testFn: () => T | Promise<T>,
+  options?: WithCassetteOptions
+): Promise<T>`}
+/>
+
+From `tapedeck/vitest`. Runs `testFn` with `cassetteName` pinned and `replay`
+forced for its duration, publishing an ambient context (via `AsyncLocalStorage`)
+that any active [`cassetteMiddleware`](#cassetteMiddleware) instance picks up. The
+context tears down automatically on exit — no global setup/teardown needed.
+
+`options.mode` overrides the forced `replay`; `options.cassetteDir` overrides the
+directory. The `WithCassetteOptions` shape is `&lbrace; cassetteDir?: string; mode?: CassetteMode &rbrace;`.
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { withCassette } from 'tapedeck/vitest';
+
+describe('checkout agent', () => {
+  it('runs the checkout flow', async () => {
+    await withCassette('checkout-flow.json', async () => {
+      const result = await runAgent({ prompt: 'buy a t-shirt' });
+      expect(result.steps).toHaveLength(3);
+    });
+  });
+});
+```
+
+<Callout kind="info" title="Re-exported core surface">
+  <code>tapedeck/vitest</code> also re-exports
+  <code>cassetteMiddleware</code> and the <code>CassetteMiddlewareOptions</code> /
+  <code>CassetteMode</code> types, so a test file can import everything it needs
+  from the one entry point.
+</Callout>
+
+<ApiSignature
+  id="CassetteError"
+  name="CassetteError"
+  kind="class"
+  signature={`class CassetteError extends Error {}`}
+/>
+
+The base class every tapedeck error extends. Catch it to handle the whole family
+with a single `instanceof`. The constructor sets `name` from the concrete
+subclass and restores the prototype chain (`Object.setPrototypeOf`), so
+`instanceof` works across module boundaries and downlevel transpilation.
+
+```ts
+import { CassetteError } from 'tapedeck';
+
+try {
+  await generateText({ model, prompt });
+} catch (err) {
+  if (err instanceof CassetteError) {
+    // a miss, a leaked secret, a corrupt file, or a bad mode
+  }
+  throw err;
+}
+```
+
+<ApiSignature
+  id="CassetteMissError"
+  name="CassetteMissError"
+  kind="class"
+  signature={`class CassetteMissError extends CassetteError {
+  readonly hash: string;
+  readonly cassetteDir: string;
+  readonly cassettePath: string;
+}`}
+/>
+
+Thrown in `replay` mode when no cassette matches the request hash. The message
+embeds the computed hash, the path searched, and a hint to re-run with
+`CASSETTE_MODE=record`. This is the load-bearing failure: a changed prompt or
+tool schema produces a different hash, misses, and fails CI loudly instead of
+replaying stale data.
+
+<ApiSignature
+  id="CassetteSecretError"
+  name="CassetteSecretError"
+  kind="class"
+  signature={`class CassetteSecretError extends CassetteError {
+  readonly paths: string[];
+  readonly cassettePath: string | undefined;
+}`}
+/>
+
+Thrown when a cassette being replayed still contains a value that the active
+`redact` matchers would have stripped — i.e. a secret leaked into a committed
+cassette. `paths` lists the offending dotted field paths so the leak is easy to
+locate before it ships.
+
+<ApiSignature
+  id="CassetteCorruptError"
+  name="CassetteCorruptError"
+  kind="class"
+  signature={`class CassetteCorruptError extends CassetteError {
+  readonly cassettePath: string;
+  readonly reason: string;
+}`}
+/>
+
+Thrown when a cassette file exists but is unreadable: invalid JSON, an unknown or
+missing version, a malformed response shape, or a response type that doesn't
+match the call (a `stream` cassette served to `doGenerate`, or vice versa).
+
+<ApiSignature
+  id="CassetteModeError"
+  name="CassetteModeError"
+  kind="class"
+  signature={`class CassetteModeError extends CassetteError {
+  readonly mode: string;
+}`}
+/>
+
+Thrown when an invalid mode string is supplied — anything other than `record`,
+`replay`, or `live`. Raised eagerly at middleware construction when `mode` is
+statically set, and otherwise when the ambient context resolves.
+
+<ApiSignature
+  id="computeCassetteHash"
+  name="computeCassetteHash"
+  kind="function"
+  signature={`function computeCassetteHash(request: CassetteRequestKey): string`}
+/>
+
+The stable hash that gives a cassette its identity. Returns the bare hex SHA-256
+digest of the canonicalized, key-sorted JSON of
+`&lbrace; modelProvider, modelId, prompt, toolSchemas, maxOutputTokens, temperature, topP &rbrace;`.
+Tool schemas are normalized first (see [`normalizeTools`](#normalizeTools)), so
+cosmetic description changes don't invalidate a cassette but a changed prompt,
+input schema, or sampling param does.
+
+```ts
+import { computeCassetteHash } from 'tapedeck';
+
+const hash = computeCassetteHash({
+  modelProvider: 'openai',
+  modelId: 'gpt-4o',
+  prompt: [{ role: 'user', content: [{ type: 'text', text: 'Say hi' }] }],
+  temperature: 0.7,
+});
+// '9f2c…' (bare hex; callers prefix 'sha256:' for display)
+```
+
+<ApiSignature
+  id="loadCassette"
+  name="loadCassette"
+  kind="function"
+  signature={`function loadCassette(hash: string, dir: string): Promise<Cassette | null>`}
+/>
+
+Read a hash-addressed cassette from `dir`. Resolves to `null` on a miss (the file
+doesn't exist) and throws [`CassetteCorruptError`](#CassetteCorruptError) for a
+file that exists but is unreadable or malformed.
+
+<ApiSignature
+  id="saveCassette"
+  name="saveCassette"
+  kind="function"
+  signature={`function saveCassette(hash: string, dir: string, cassette: Cassette): Promise<void>`}
+/>
+
+Write `cassette` into `dir` under its hash-addressed filename, creating parent
+directories as needed. The file is pretty-printed JSON so it diffs cleanly in PRs.
+
+<ApiSignature
+  id="stableStringify"
+  name="stableStringify"
+  kind="function"
+  signature={`function stableStringify(value: unknown): string`}
+/>
+
+Deterministic `JSON.stringify`: object keys are emitted in sorted order at every
+level, so semantically equal requests serialize identically. The canonicalization
+primitive underneath [`computeCassetteHash`](#computeCassetteHash).
+
+<ApiSignature
+  id="normalizeTools"
+  name="normalizeTools"
+  kind="function"
+  signature={`function normalizeTools(tools: CassetteRequestKey['tools']): unknown`}
+/>
+
+Strip `description` fields recursively from a tool array before hashing.
+Descriptions are irrelevant to behaviour and churn frequently, so dropping them
+keeps a cassette stable across doc-only edits while still keying on the input
+schema. Returns `undefined` when `tools` is absent.
+
+<ApiSignature
+  id="cassetteFilename"
+  name="cassetteFilename"
+  kind="function"
+  signature={`function cassetteFilename(hash: string): string`}
+/>
+
+The on-disk filename for a hash-addressed cassette: `` `${hash}.cassette.json` ``.
+
+<ApiSignature
+  id="CASSETTE_VERSION"
+  name="CASSETTE_VERSION"
+  kind="const"
+  signature={`const CASSETTE_VERSION = 'tapedeck@0.1.0';`}
+/>
+
+The cassette format version stamped into every recorded file's `version` field.
+On read, a cassette whose version doesn't start with `tapedeck@` is rejected with
+[`CassetteCorruptError`](#CassetteCorruptError).
+
+<ApiSignature
+  id="REDACTED"
+  name="REDACTED"
+  kind="const"
+  signature={`const REDACTED = '[REDACTED]';`}
+/>
+
+The placeholder string written in place of a matched secret value at record time.
+
+<ApiSignature
+  id="DEFAULT_REDACT"
+  name="DEFAULT_REDACT"
+  kind="const"
+  signature={`const DEFAULT_REDACT: (string | RegExp)[] = [
+  'apiKey',
+  'authorization',
+  'x-api-key',
+  'bearer',
+  'token',
+];`}
+/>
+
+The built-in key matchers, always applied even when the caller passes none. Any
+`redact` option you supply is merged on top of these — you extend the defaults,
+never replace them.

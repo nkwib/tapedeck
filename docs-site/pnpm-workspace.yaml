@@ -1,0 +1,9 @@
+# Makes docs-site its own workspace root so installs don't climb to the
+# tapedeck library root. Approves the esbuild build script used by Vite.
+packages: []
+
+allowBuilds:
+  esbuild: true
+
+onlyBuiltDependencies:
+  - esbuild

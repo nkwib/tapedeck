@@ -1,0 +1,112 @@
+<script>
+  import Callout from '$lib/components/Callout.svelte';
+  import CassetteFlow from '$lib/components/CassetteFlow.svelte';
+</script>
+
+# A miss throws in CI
+
+## What we did
+
+In `replay` mode, when no cassette matches the request hash, tapedeck
+throws `CassetteMissError`. It does **not** fall back to the live API,
+and it does not return an empty or placeholder response. The test fails,
+loudly, with the hash and the path it searched.
+
+```ts
+if (cfg.mode === 'replay') {
+  const cassette = await readCassetteFile(path);
+  if (!cassette) {
+    throw new CassetteMissError({ hash, cassetteDir: cfg.cassetteDir, cassettePath: path });
+  }
+  // ... serve the cassette
+}
+```
+
+There are three modes, and only one of them is strict:
+
+| Mode | Behaviour |
+|------|-----------|
+| `record` | Calls the real model, serializes request + response to a cassette, returns the live result. |
+| `replay` | Looks up the cassette by hash, serves it. **A miss throws.** |
+| `live` | Passthrough. No recording, no lookup. |
+
+The recommended setup is `live` in development, `record` once to capture
+a fixture, and **`replay` in CI**.
+
+<CassetteFlow highlight="replay" />
+
+## Why a miss is a hard failure
+
+The cassette is addressed by a stable hash of everything that determines
+the model's behaviour:
+
+```
+{ modelProvider, modelId, prompt, toolSchemas, maxOutputTokens, temperature, topP }
+```
+
+Change the prompt, change a tool's input schema, or change a sampling
+parameter, and the hash changes. In `replay` mode a changed hash means
+no cassette is found — a miss — and the miss throws. That chain is the
+entire value proposition:
+
+> a behavioural change in your agent fails CI loudly, instead of
+> silently replaying a fixture that no longer describes what your code
+> does.
+
+The two alternatives we rejected both hide that signal:
+
+1. **Fall back to live on a miss.** Now CI quietly hits the network when
+   a prompt changes — non-deterministic, costs money, needs an API key
+   in CI, and flakes on rate limits. The whole point of `replay` was to
+   be offline and deterministic; a silent live fallback throws all of
+   that away at exactly the moment you'd want to notice the change.
+2. **Return a stale or default response on a miss.** Now a changed
+   prompt is tested against a fixture recorded for the *old* prompt. The
+   test passes, green, while asserting against data that no longer
+   matches the code. This is the classic failure mode of hand-managed
+   fixtures: they rot, and nothing tells you.
+
+A loud miss converts "my prompt drifted from my fixture" from an
+invisible bug into a one-line CI failure with a fix attached: re-record.
+
+<Callout kind="warn" title="A miss means re-record, not retry">
+  <code>CassetteMissError</code> is not a flake. It means the request
+  your code makes today no longer matches any committed cassette — run
+  the test once with <code>CASSETTE_MODE=record</code>, review the
+  cassette diff in your PR, and commit the new fixture. The diff *is*
+  the change review.
+</Callout>
+
+## Why the hash strips cosmetics but not behaviour
+
+Tool schemas are normalized before hashing — descriptions stripped, keys
+sorted — so a doc-only edit to a tool description does **not** invalidate
+a cassette. But a changed input schema, a reordered required field that
+changes meaning, or a changed sampling parameter does. The line is drawn
+at "could this change what the model does?" — if yes, the hash moves and
+replay misses.
+
+This keeps the failure signal honest in both directions: no false
+positives from cosmetic edits, no false negatives from real behavioural
+changes.
+
+## Consequences
+
+- **CI is deterministic, offline, and free.** No API key, no network, no
+  rate limits in the replay path.
+- **Drift is impossible to ignore.** A changed prompt or tool schema
+  cannot pass against an old fixture; it must miss and be re-recorded.
+- **The workflow is explicit.** `record` to capture, commit the
+  cassette, `replay` to enforce. The
+  [`withCassette`](https://github.com/nkwib/tapedeck/blob/main/src/vitest.ts)
+  vitest helper forces `replay` for the duration of a test so a test can
+  never accidentally run live.
+
+## Related
+
+- The middleware miss path:
+  [`src/middleware.ts`](https://github.com/nkwib/tapedeck/blob/main/src/middleware.ts)
+- The hash algorithm:
+  [`src/hash.ts`](https://github.com/nkwib/tapedeck/blob/main/src/hash.ts)
+- Error types:
+  [`src/errors.ts`](https://github.com/nkwib/tapedeck/blob/main/src/errors.ts)
