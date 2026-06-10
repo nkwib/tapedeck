@@ -16,7 +16,20 @@ is the public, dated record of what tapedeck is tested against.
 
 | SDK (`ai`) | Date tested | tapedeck | Status | Notes |
 |------------|-------------|----------|--------|-------|
+| 6.0.0      | 2026-06-10  | 0.3.0    | ✅ pass | Multi-interaction named cassettes (v2 format); v1 cassettes replay as-is. |
+| 6.0.0      | 2026-06-10  | 0.2.0    | ✅ pass | Same spec surface as the launch row. Hash digests and cassette format unchanged. |
 | 6.0.0      | 2026-06-10  | 0.1.0    | ✅ pass | Launch row. Model spec v3: `doGenerate` returns `content[]`; `doStream` yields `text-delta` / `tool-call` parts. |
+
+## Edge runtimes (Cloudflare Workers, etc.)
+
+As of 0.2.0 the core import graph is edge-safe: hashing uses WebCrypto, the
+default filesystem store imports `node:fs` *lazily* (pass
+`memoryCassetteStore()` or a KV/R2-backed store and it never loads), and the
+one static Node builtin left is `node:async_hooks` — provided by Cloudflare
+Workers under the `nodejs_compat` flag.
+
+A deployed-Worker smoke test is still TODO — treat Workers support as
+*designed-for, not yet CI-verified*. The CLI is Node-only by design.
 
 ## Pinned peer range
 

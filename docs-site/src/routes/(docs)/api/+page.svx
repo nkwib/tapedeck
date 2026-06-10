@@ -12,18 +12,29 @@ Every public symbol exported from `@nkwib/tapedeck`. Source of truth:
 |---|---|---|
 | [`cassetteMiddleware`](#cassetteMiddleware) | function | Record/replay/live middleware for `wrapLanguageModel`. |
 | [`withCassette`](#withCassette) | function | Vitest helper: pin a test to a named cassette. |
+| [`toFollowRoute`](#toFollowRoute) | function | Vitest matcher: assert a tool trajectory follows a ToolRoute router. |
 | [`CassetteError`](#CassetteError) | class | Base class for the whole error family. |
 | [`CassetteMissError`](#CassetteMissError) | class | Replay miss — no cassette matched the hash. |
 | [`CassetteSecretError`](#CassetteSecretError) | class | A replayed cassette still holds unredacted secrets. |
 | [`CassetteCorruptError`](#CassetteCorruptError) | class | Unreadable cassette: bad JSON, version, or shape. |
 | [`CassetteModeError`](#CassetteModeError) | class | Invalid mode string. |
-| [`computeCassetteHash`](#computeCassetteHash) | function | The stable hash used for cassette identity. |
+| [`computeCassetteHash`](#computeCassetteHash) | function | The stable hash used for cassette identity (async, WebCrypto). |
 | [`loadCassette`](#loadCassette) | function | Read a hash-addressed cassette from a directory. |
 | [`saveCassette`](#saveCassette) | function | Write a hash-addressed cassette into a directory. |
+| [`parseCassette`](#parseCassette) | function | Parse + validate raw cassette text (single or multi). |
+| [`serializeCassette`](#serializeCassette) | function | Serialize a cassette file to its on-disk form. |
+| [`isMultiCassette`](#isMultiCassette) | function | Narrow a `CassetteFile` to the multi-interaction format. |
+| [`diffCassettes`](#diffCassettes) | function | Semantic field-level diff of two single cassettes. |
+| [`diffCassetteFiles`](#diffCassetteFiles) | function | Diff any two cassette files, pairing interactions by hash. |
+| [`mergeCassetteDirs`](#mergeCassetteDirs) | function | Merge cassette directories with conflict reporting. |
+| [`fileCassetteStore`](#fileCassetteStore) | function | The default filesystem `CassetteStore`. |
+| [`memoryCassetteStore`](#memoryCassetteStore) | function | In-memory `CassetteStore` for tests and edge runtimes. |
+| [`withSpan`](#withSpan) | function | Run a function inside an OTel-compatible span. |
 | [`stableStringify`](#stableStringify) | function | Deterministic, key-sorted JSON. |
 | [`normalizeTools`](#normalizeTools) | function | Strip tool descriptions before hashing. |
 | [`cassetteFilename`](#cassetteFilename) | function | On-disk filename for a hash. |
-| [`CASSETTE_VERSION`](#CASSETTE_VERSION) | const | Current cassette format version. |
+| [`CASSETTE_VERSION`](#CASSETTE_VERSION) | const | Single-interaction cassette format version. |
+| [`MULTI_CASSETTE_VERSION`](#MULTI_CASSETTE_VERSION) | const | Multi-interaction cassette format version. |
 | [`REDACTED`](#REDACTED) | const | Placeholder written in place of a secret. |
 | [`DEFAULT_REDACT`](#DEFAULT_REDACT) | const | Built-in key matchers. |
 
@@ -47,7 +58,9 @@ and replaying with no other code changes. A bad static `mode` throws
 | `mode` | `'record' \| 'replay' \| 'live'` | `'live'` | Operating mode. `record` calls the real model and persists request + response; `replay` serves a cassette by hash and throws on a miss; `live` is passthrough. |
 | `cassetteDir` | `string` | `'./cassettes'` | Directory cassettes are read from / written to. |
 | `redact` | `(string \| RegExp)[]` | `[]` | Extra key matchers, merged with [`DEFAULT_REDACT`](#DEFAULT_REDACT). Strings match field/header names case-insensitively; RegExps test the raw key. |
-| `cassetteName` | `string` | &mdash; | Force a specific filename instead of hash-addressed lookup. Mostly used internally by [`withCassette`](#withCassette); set it for fixed fixtures. |
+| `cassetteName` | `string` | &mdash; | Force a specific filename instead of hash-addressed lookup. Named cassettes are multi-interaction: every call is stored in the file keyed by request hash. Mostly used internally by [`withCassette`](#withCassette); set it for fixed fixtures. |
+| `store` | `CassetteStore` | filesystem | Storage backend (`read`/`write`/`list`). Pass [`memoryCassetteStore()`](#memoryCassetteStore) on edge runtimes where there is no filesystem. |
+| `tracer` | `TapedeckTracer` | &mdash; | OTel-compatible tracer (e.g. `trace.getTracer('tapedeck')`). Emits `tapedeck.generate` / `tapedeck.stream` spans with mode, hash, path, and hit/miss attributes; misses record the exception with an error status. |
 
 ```ts
 import { openai } from '@ai-sdk/openai';
@@ -95,6 +108,12 @@ context tears down automatically on exit — no global setup/teardown needed.
 
 `options.mode` overrides the forced `replay`; `options.cassetteDir` overrides the
 directory. The `WithCassetteOptions` shape is `&lbrace; cassetteDir?: string; mode?: CassetteMode &rbrace;`.
+
+The named cassette is **multi-interaction**: every model call inside `testFn` is
+stored in the one file keyed by request hash, and each call replays its own
+response in any order. Each `withCassette` run is one recording session — in
+`record` mode the first write starts the file fresh, so re-recording never
+leaves stale interactions behind.
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -205,20 +224,22 @@ statically set, and otherwise when the ambient context resolves.
   id="computeCassetteHash"
   name="computeCassetteHash"
   kind="function"
-  signature={`function computeCassetteHash(request: CassetteRequestKey): string`}
+  signature={`function computeCassetteHash(request: CassetteRequestKey): Promise<string>`}
 />
 
-The stable hash that gives a cassette its identity. Returns the bare hex SHA-256
-digest of the canonicalized, key-sorted JSON of
+The stable hash that gives a cassette its identity. Resolves to the bare hex
+SHA-256 digest of the canonicalized, key-sorted JSON of
 `&lbrace; modelProvider, modelId, prompt, toolSchemas, maxOutputTokens, temperature, topP &rbrace;`.
 Tool schemas are normalized first (see [`normalizeTools`](#normalizeTools)), so
 cosmetic description changes don't invalidate a cassette but a changed prompt,
-input schema, or sampling param does.
+input schema, or sampling param does. Async since 0.2.0 — hashing uses WebCrypto
+(`crypto.subtle`), available in Node ≥18, Workers, and browsers; digests are
+identical to the previous `node:crypto` implementation.
 
 ```ts
 import { computeCassetteHash } from '@nkwib/tapedeck';
 
-const hash = computeCassetteHash({
+const hash = await computeCassetteHash({
   modelProvider: 'openai',
   modelId: 'gpt-4o',
   prompt: [{ role: 'user', content: [{ type: 'text', text: 'Say hi' }] }],
@@ -231,12 +252,14 @@ const hash = computeCassetteHash({
   id="loadCassette"
   name="loadCassette"
   kind="function"
-  signature={`function loadCassette(hash: string, dir: string): Promise<Cassette | null>`}
+  signature={`function loadCassette(hash: string, dir: string): Promise<CassetteFile | null>`}
 />
 
 Read a hash-addressed cassette from `dir`. Resolves to `null` on a miss (the file
 doesn't exist) and throws [`CassetteCorruptError`](#CassetteCorruptError) for a
-file that exists but is unreadable or malformed.
+file that exists but is unreadable or malformed. `CassetteFile` is the
+`Cassette | MultiCassette` union — narrow with
+[`isMultiCassette`](#isMultiCassette).
 
 <ApiSignature
   id="saveCassette"
@@ -247,6 +270,155 @@ file that exists but is unreadable or malformed.
 
 Write `cassette` into `dir` under its hash-addressed filename, creating parent
 directories as needed. The file is pretty-printed JSON so it diffs cleanly in PRs.
+
+<ApiSignature
+  id="parseCassette"
+  name="parseCassette"
+  kind="function"
+  signature={`function parseCassette(raw: string, path: string): CassetteFile`}
+/>
+
+Parse and validate raw cassette text — single (v1) or multi-interaction (v2).
+Throws [`CassetteCorruptError`](#CassetteCorruptError) for bad JSON, an unknown
+version, or a malformed response shape. `path` is only used in error messages.
+
+<ApiSignature
+  id="serializeCassette"
+  name="serializeCassette"
+  kind="function"
+  signature={`function serializeCassette(cassette: CassetteFile): string`}
+/>
+
+Serialize a cassette file to its on-disk form: pretty-printed JSON with a
+trailing newline, so cassettes diff cleanly in PRs.
+
+<ApiSignature
+  id="isMultiCassette"
+  name="isMultiCassette"
+  kind="function"
+  signature={`function isMultiCassette(file: CassetteFile): file is MultiCassette`}
+/>
+
+Narrow a `CassetteFile` to the multi-interaction format. Multi cassettes hold
+`interactions: &lbrace; hash, request, response &rbrace;[]` — one entry per model call a
+named-cassette test makes.
+
+<ApiSignature
+  id="diffCassettes"
+  name="diffCassettes"
+  kind="function"
+  signature={`function diffCassettes(a: Cassette, b: Cassette): CassetteDiffResult`}
+/>
+
+Structurally diff two single cassettes, ignoring `recordedAt`. The result lists
+leaf-level divergences as dotted paths (`request.prompt[0].content[0].text`)
+plus a `hashChanged` flag. `formatCassetteDiff(result)` renders it as
+human-readable text — this is what `npx tapedeck diff` prints.
+
+<ApiSignature
+  id="diffCassetteFiles"
+  name="diffCassetteFiles"
+  kind="function"
+  signature={`function diffCassetteFiles(a: CassetteFile, b: CassetteFile): CassetteFileDiffResult`}
+/>
+
+Diff two cassette files of any format, pairing interactions by request hash.
+The result reports hashes present only on one side (`onlyA` / `onlyB`) and
+field-level divergences for shared hashes (`changed`). Render with
+`formatCassetteFileDiff(result)`.
+
+<ApiSignature
+  id="mergeCassetteDirs"
+  name="mergeCassetteDirs"
+  kind="function"
+  signature={`function mergeCassetteDirs(
+  srcDir: string,
+  destDir: string,
+  options?: { force?: boolean; store?: CassetteStore }
+): Promise<MergeCassettesResult>`}
+/>
+
+Merge every cassette in `srcDir` into `destDir`. New files are copied,
+identical files skipped, and same-name files with different content are
+reported as conflicts — left untouched unless `force` is set. Source files are
+validated before propagating, so a corrupt fixture fails the merge instead of
+spreading. Backs `npx tapedeck merge`.
+
+<ApiSignature
+  id="fileCassetteStore"
+  name="fileCassetteStore"
+  kind="function"
+  signature={`function fileCassetteStore(): CassetteStore`}
+/>
+
+The default storage backend: cassettes as files on disk. `node:fs` is imported
+lazily inside each method, so importing tapedeck has no Node-only side effects
+— the core stays edge-importable.
+
+<ApiSignature
+  id="memoryCassetteStore"
+  name="memoryCassetteStore"
+  kind="function"
+  signature={`function memoryCassetteStore(
+  seed?: Record<string, string> | Map<string, string>
+): CassetteStore & { entries: Map<string, string> }`}
+/>
+
+An in-memory `CassetteStore` for tests and edge runtimes — seed it with
+cassette text at build time (e.g. bundled into a Worker) or back a custom store
+with KV/R2 using the same three-method interface
+(`read` / `write` / `list`).
+
+```ts
+import { cassetteMiddleware, memoryCassetteStore } from '@nkwib/tapedeck';
+
+const store = memoryCassetteStore({
+  'cassettes/abc….cassette.json': cassetteJsonText,
+});
+cassetteMiddleware({ mode: 'replay', store });
+```
+
+<ApiSignature
+  id="withSpan"
+  name="withSpan"
+  kind="function"
+  signature={`function withSpan<T>(
+  tracer: TapedeckTracer | undefined,
+  name: string,
+  attributes: Record<string, string | number | boolean>,
+  fn: (span?: TapedeckSpan) => Promise<T>
+): Promise<T>`}
+/>
+
+Run `fn` inside a span when a tracer is configured: sets attributes up front,
+marks OK/ERROR status (`SPAN_STATUS_OK` / `SPAN_STATUS_ERROR`), records
+exceptions, and always ends the span. With no tracer it's a plain call. The
+`TapedeckTracer` / `TapedeckSpan` types are structural subsets of the
+OpenTelemetry interfaces, so `trace.getTracer('tapedeck')` just works — and
+tapedeck keeps zero runtime dependencies.
+
+<ApiSignature
+  id="toFollowRoute"
+  name="toFollowRoute"
+  kind="function"
+  signature={`function toFollowRoute(received: unknown, router: RouteLike): ToFollowRouteResult`}
+/>
+
+From `@nkwib/tapedeck/vitest`. A vitest matcher asserting that a tool-call
+trajectory only makes transitions a
+[ToolRoute](https://github.com/nkwib/toolroute) router allows. Accepts AI SDK
+`result.steps`, a flat `&lbrace; toolName &rbrace;[]` list, or bare tool-name strings, and
+pinpoints the first illegal transition. The router is typed structurally
+(`&lbrace; adjacency, routerVersion &rbrace;`), so any ToolRoute version works — and
+toolroute doesn't need to be installed at all.
+
+```ts
+import { expect } from 'vitest';
+import { toFollowRoute } from '@nkwib/tapedeck/vitest';
+
+expect.extend({ toFollowRoute });
+expect(result.steps).toFollowRoute(router);
+```
 
 <ApiSignature
   id="stableStringify"
@@ -287,9 +459,21 @@ The on-disk filename for a hash-addressed cassette: `` `${hash}.cassette.json` `
   signature={`const CASSETTE_VERSION = 'tapedeck@0.1.0';`}
 />
 
-The cassette format version stamped into every recorded file's `version` field.
-On read, a cassette whose version doesn't start with `tapedeck@` is rejected with
+The single-interaction (v1) cassette format version, stamped into every
+hash-addressed file's `version` field. On read, a cassette whose version
+doesn't start with `tapedeck@` is rejected with
 [`CassetteCorruptError`](#CassetteCorruptError).
+
+<ApiSignature
+  id="MULTI_CASSETTE_VERSION"
+  name="MULTI_CASSETTE_VERSION"
+  kind="const"
+  signature={`const MULTI_CASSETTE_VERSION = 'tapedeck@0.3.0';`}
+/>
+
+The multi-interaction (v2) cassette format version, stamped into named cassette
+files. A v2 file holds `interactions: &lbrace; hash, request, response &rbrace;[]` instead
+of a single request/response pair.
 
 <ApiSignature
   id="REDACTED"
