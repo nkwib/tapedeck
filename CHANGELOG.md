@@ -35,6 +35,16 @@ cassette replays as-is.
 - **Diff/merge as a library**: `diffCassettes`, `formatCassetteDiff`,
   `mergeCassetteDirs` are exported alongside new helpers `parseCassette` and
   `serializeCassette`.
+- **`toFollowRoute()` matcher** in `tapedeck/vitest` — asserts an agent's
+  tool-call trajectory only makes transitions a
+  [toolroute](https://github.com/nkwib/toolroute) router allows. Accepts AI
+  SDK `result.steps`, `{ toolName }[]`, or bare names; the router is typed
+  structurally so toolroute is not a dependency. Register with
+  `expect.extend({ toFollowRoute })`.
+- CI: `ci.yml` (typecheck, tests, build, CLI smoke, docs-site build) and a
+  weekly `sdk-compat.yml` cron that runs the suite against `ai@latest`,
+  appends a pass row to `COMPATIBILITY.md` via PR, and opens an `sdk-drift`
+  issue on failure.
 
 ### Changed
 
