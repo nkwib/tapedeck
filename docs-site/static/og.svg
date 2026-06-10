@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" fill="none">
+  <rect width="1200" height="630" fill="#0a0a0b" />
+  <rect x="40" y="40" width="1120" height="550" rx="20" fill="#131317" stroke="#2e2e35" stroke-width="2" />
+
+  <text x="100" y="160" font-family="JetBrains Mono, monospace" font-size="28" fill="#fbbf24" letter-spacing="0.18em">TAPEDECK · v0.1</text>
+  <text x="100" y="260" font-family="Inter, sans-serif" font-size="76" font-weight="700" fill="#f4f4f5" letter-spacing="-0.025em">Record once.</text>
+  <text x="100" y="340" font-family="Inter, sans-serif" font-size="76" font-weight="700" fill="#fbbf24" letter-spacing="-0.025em">Replay forever.</text>
+  <text x="100" y="400" font-family="Inter, sans-serif" font-size="28" fill="#a1a1aa">Vercel AI SDK companion · record/replay middleware · deterministic CI</text>
+
+  <!-- Mini cassette -->
+  <g transform="translate(100, 450)">
+    <rect x="0" y="0" width="480" height="120" rx="14" fill="#131317" stroke="#fbbf24" stroke-width="2.4" />
+    <circle cx="150" cy="60" r="34" fill="#131317" stroke="#fbbf24" stroke-width="2.4" />
+    <circle cx="330" cy="60" r="34" fill="#131317" stroke="#fbbf24" stroke-width="2.4" />
+    <circle cx="150" cy="60" r="6" fill="#fbbf24" />
+    <circle cx="330" cy="60" r="6" fill="#fbbf24" />
+    <line x1="150" y1="26" x2="330" y2="26" stroke="#fbbf24" stroke-width="2.4" />
+    <text x="240" y="105" text-anchor="middle" font-family="JetBrains Mono" font-size="15" fill="#fcd34d">record → replay</text>
+  </g>
+
+  <text x="1100" y="570" text-anchor="end" font-family="JetBrains Mono" font-size="20" fill="#71717a">npm i -D tapedeck · MIT</text>
+</svg>

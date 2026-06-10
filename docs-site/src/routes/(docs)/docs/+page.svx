@@ -1,0 +1,261 @@
+<script>
+  import Callout from '$lib/components/Callout.svelte';
+  import CassetteFlow from '$lib/components/CassetteFlow.svelte';
+  import DemoTerminal from '$lib/components/DemoTerminal.svelte';
+
+  const demoBody = `<span class="cmt"># 1. record once — hits the live API, writes a cassette</span>
+<span class="prompt">$</span> CASSETTE_MODE=record pnpm test
+[vitest] checkout agent &gt; runs the checkout flow
+[tapedeck] <span class="prop">record</span>: openai/gpt-4o -&gt; cassettes/<span class="str">a1b2c3.cassette.json</span>
+ <span class="good">✓</span> checkout agent &gt; runs the checkout flow (<span class="num">1284ms</span>)
+<span class="good">Test Files  1 passed (1)</span>
+
+<span class="cmt"># 2. commit the cassette, then replay forever — offline, deterministic, free</span>
+<span class="prompt">$</span> git add cassettes/ &amp;&amp; git commit -m <span class="str">"record checkout cassette"</span>
+<span class="prompt">$</span> CASSETTE_MODE=replay pnpm test
+[tapedeck] <span class="prop">replay</span>: openai/gpt-4o &lt;- cassettes/<span class="str">a1b2c3.cassette.json</span>
+ <span class="good">✓</span> checkout agent &gt; runs the checkout flow (<span class="num">3ms</span>)
+<span class="good">Test Files  1 passed (1)</span>`;
+</script>
+
+# Guide
+
+> Agent tests that hit the live model are flaky, paid, and nondeterministic —
+> a temperature wobble or a provider hiccup turns a green suite red, and every
+> CI run burns tokens. **tapedeck** records that call once against the real API,
+> commits the result as a cassette, and replays it on every run after:
+> deterministic, offline, free, and stream-accurate.
+
+tapedeck is a [Vercel AI SDK](https://sdk.vercel.ai) companion. It plugs in at
+the `wrapLanguageModel` middleware layer (model spec **v3**), so it is
+provider-agnostic and stream-aware by construction — no HTTP proxy, no mock to
+hand-write, no infra. Switch behaviour with one env var; nothing else in your
+code changes.
+
+<CassetteFlow />
+
+<h2 id="install">Install</h2>
+
+```bash
+npm install -D tapedeck
+# or
+pnpm add -D tapedeck
+```
+
+Requires the `ai` peer (`>=6.0.0 <7`). tapedeck has zero runtime dependencies
+beyond that peer — `@ai-sdk/provider` is a type-only dev dependency.
+
+<h2 id="quickstart">Quickstart</h2>
+
+Wrap your model once and read the mode from an env var. That is the whole
+integration:
+
+```ts
+import { openai } from '@ai-sdk/openai';
+import { generateText, wrapLanguageModel } from 'ai';
+import { cassetteMiddleware } from 'tapedeck';
+
+const model = wrapLanguageModel({
+  model: openai('gpt-4o'),
+  middleware: cassetteMiddleware({
+    mode: process.env.CASSETTE_MODE ?? 'live', // record | replay | live
+    cassetteDir: './cassettes',
+    redact: ['apiKey', 'authorization', /token/i],
+  }),
+});
+
+// CASSETTE_MODE=record → hits the live API, writes a cassette.
+// CASSETTE_MODE=replay → offline, deterministic, free.
+const { text } = await generateText({ model, prompt: 'Say hi' });
+```
+
+The recommended workflow: `live` in development, `record` to capture a fixture
+once, `replay` in CI. Run the test against the live API a single time, commit
+the cassette, and flip CI to `replay`.
+
+<DemoTerminal filename="record once, then replay" body={demoBody} />
+
+<h2 id="modes">Modes</h2>
+
+| Mode | Behaviour |
+|------|-----------|
+| `record` | Calls the real model, serializes request + response to a cassette, returns the live result. |
+| `replay` | Looks up the cassette by hash, serves it. **A miss throws** — a changed prompt or tool schema fails the test, forcing a re-record. |
+| `live` | Passthrough. No recording, no lookup. |
+
+In `record` mode the call flows out to the provider and the response is
+captured on the way back:
+
+<CassetteFlow highlight="record" />
+
+In `replay` mode the cassette is resolved by hash and served straight back —
+the provider is never touched:
+
+<CassetteFlow highlight="replay" />
+
+<Callout kind="info" title="One env var, no code change">
+  An invalid mode string fails fast with <code>CassetteModeError</code> the
+  moment the middleware is constructed, so a typo'd <code>CASSETTE_MODE</code>
+  never silently falls through to a live call.
+</Callout>
+
+<h2 id="middleware">cassetteMiddleware</h2>
+
+`cassetteMiddleware(options?)` returns an AI SDK `LanguageModelV3Middleware`
+that intercepts both `doGenerate` (one-shot) and `doStream` (streaming).
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `mode` | `'record' \| 'replay' \| 'live'` | `'live'` | Operating mode. |
+| `cassetteDir` | `string` | `'./cassettes'` | Directory cassettes are read from / written to. |
+| `redact` | `(string \| RegExp)[]` | `[]` | Extra key matchers, merged with the built-in defaults. |
+| `cassetteName` | `string` | — | Force a specific filename instead of hash-addressing. Mostly used internally by `withCassette`. |
+
+tapedeck also exports lower-level primitives for direct use:
+`computeCassetteHash(request)`, `loadCassette(hash, dir)` /
+`saveCassette(hash, dir, cassette)`, `stableStringify(value)`,
+`normalizeTools(tools)`, and the constants `CASSETTE_VERSION`,
+`cassetteFilename(hash)`, `REDACTED`, `DEFAULT_REDACT`.
+
+<h2 id="streaming">Streaming</h2>
+
+Streaming is first-class — not a non-goal. In `record` mode tapedeck drains the
+live stream, captures the ordered stream parts, and re-serves them so your code
+still receives the response. In `replay` mode the recorded parts are replayed as
+a genuine `ReadableStream` via the SDK's own `simulateReadableStream`, so
+`streamText`, UI message streams, and tool-call streaming all see the surface
+they would live.
+
+```ts
+import { streamText } from 'ai';
+
+const { textStream } = await streamText({ model, prompt: 'Tell me a story' });
+for await (const delta of textStream) process.stdout.write(delta);
+// Identical output whether the model is live or replayed from a cassette.
+```
+
+<h2 id="cassette-format">Cassette format</h2>
+
+Cassettes are pretty-printed JSON, keyed by a stable hash, designed to diff
+cleanly in PRs:
+
+```json
+{
+  "version": "tapedeck@0.1.0",
+  "hash": "sha256:abc123…",
+  "recordedAt": "2026-06-10T12:00:00Z",
+  "request": {
+    "modelProvider": "openai",
+    "modelId": "gpt-4o",
+    "prompt": [ ],
+    "tools": [ ],
+    "temperature": 0.7
+  },
+  "response": {
+    "type": "stream",
+    "chunks": [
+      { "type": "text-delta", "id": "0", "delta": "I'll" },
+      { "type": "text-delta", "id": "0", "delta": " help" },
+      { "type": "tool-call", "toolCallId": "call_123", "toolName": "search", "input": "{\"query\":\"t-shirts\"}" }
+    ]
+  }
+}
+```
+
+A one-shot `generateText` produces a `"type": "generate"` response holding the
+recorded content array, finish reason, and usage instead of chunks.
+
+<h2 id="hash">Hash algorithm</h2>
+
+The hash is a SHA-256 of the canonicalized, sorted JSON of:
+
+```text
+{ modelProvider, modelId, prompt, toolSchemas, maxOutputTokens, temperature, topP }
+```
+
+Tool schemas are normalized (descriptions stripped, keys sorted) so cosmetic doc
+changes don't invalidate a cassette — but a changed prompt, tool input schema,
+or sampling param does. That is the point: a behavioural change fails CI loudly
+instead of replaying stale data.
+
+<Callout kind="good" title="A changed prompt fails CI on purpose">
+  When the inputs to the hash change, replay misses with
+  <code>CassetteMissError</code> and the test fails. Re-record, eyeball the
+  cassette diff in the PR, and commit the new fixture.
+</Callout>
+
+<h2 id="redaction">Secret redaction</h2>
+
+Redaction is key-name based and runs **at record time**, so secrets never reach
+disk:
+
+- Default matchers: `apiKey`, `authorization`, `x-api-key`, `bearer`, `token`
+  (case-insensitive).
+- Configurable via `redact: (string | RegExp)[]` — strings match field / header
+  names case-insensitively; RegExps test the raw key. Your matchers are merged
+  with the built-in defaults.
+- Replaying a cassette that still contains a value a matcher would strip throws
+  `CassetteSecretError` — a committed secret fails the build instead of leaking.
+
+```ts
+cassetteMiddleware({
+  mode: 'record',
+  redact: ['apiKey', 'authorization', /secret/i],
+});
+```
+
+<h2 id="vitest">Vitest helper</h2>
+
+`tapedeck/vitest` exports `withCassette(name, testFn, options?)`, which pins a
+test to a named cassette and forces `replay` mode for its duration:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { withCassette } from 'tapedeck/vitest';
+
+describe('checkout agent', () => {
+  it('runs the checkout flow', async () => {
+    await withCassette('checkout-flow.json', async () => {
+      const result = await runAgent({ prompt: 'buy a t-shirt' });
+      expect(result.steps).toHaveLength(3);
+    });
+  });
+});
+```
+
+Any `cassetteMiddleware` instance active inside the callback picks up the named
+cassette automatically — via an `AsyncLocalStorage` context — and tears down on
+exit, so there is no global setup/teardown to wire up. Pass `options.mode` to
+override the forced `replay`, or `options.cassetteDir` to point at a different
+directory.
+
+<h2 id="errors">Errors</h2>
+
+| Error | When |
+|-------|------|
+| `CassetteMissError` | `replay` mode, no cassette matches the hash. Message includes the hash and the path searched. |
+| `CassetteSecretError` | A replayed cassette still contains unredacted secrets. Lists the offending field paths. |
+| `CassetteCorruptError` | Invalid JSON, unknown version, or a malformed / mismatched response shape. |
+| `CassetteModeError` | An invalid mode string was supplied. |
+
+All extend `CassetteError`, so you can catch the whole family with one
+`instanceof CassetteError`.
+
+<h2 id="non-goals">Non-goals</h2>
+
+Things explicitly **not in v1**, deferred to a future release:
+
+- **OTel span emission** — observability is out of scope for the first cut; the
+  cassette diff in a PR is the calling card.
+- **`npx tapedeck record <script>` CLI** — recording is driven through your test
+  runner and the `CASSETTE_MODE` env var in v1, not a standalone command.
+- **Cassette diff / merge tooling** — cassettes are plain JSON that diff cleanly
+  in PRs already; bespoke tooling can wait.
+- **Cloudflare Workers / Edge runtime validation** — v1 targets Node test
+  runners; Edge support is unverified.
+- **`toFollowRoute()` matcher** — the planned [toolroute](https://github.com/nkwib/toolroute)
+  cross-sell that asserts trajectories from `tapedeck/vitest` is not shipped
+  yet.
+
+See the [v2 deferred index](https://github.com/nkwib/tapedeck/blob/main/issues/999-v2-deferred.md)
+for the canonical list.

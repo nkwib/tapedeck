@@ -1,0 +1,112 @@
+<script>
+  import Callout from '$lib/components/Callout.svelte';
+  import CassetteFlow from '$lib/components/CassetteFlow.svelte';
+</script>
+
+# Middleware, not a proxy
+
+## What we did
+
+tapedeck is an AI SDK `LanguageModelV3Middleware`. You install it with
+the SDK's own `wrapLanguageModel`, and it intercepts `doGenerate` and
+`doStream` — the two methods every provider model implements.
+
+```ts
+import { openai } from '@ai-sdk/openai';
+import { generateText, wrapLanguageModel } from 'ai';
+import { cassetteMiddleware } from 'tapedeck';
+
+const model = wrapLanguageModel({
+  model: openai('gpt-4o'),
+  middleware: cassetteMiddleware({ mode: process.env.CASSETTE_MODE ?? 'live' }),
+});
+
+const { text } = await generateText({ model, prompt: 'Say hi' });
+```
+
+There is no separate process, no `localhost` port, no
+`MockLanguageModelV3` you hand-write per turn. The same wrapped `model`
+records, replays, or passes through depending on one env var.
+
+<CassetteFlow highlight="replay" />
+
+## Why this layer
+
+We considered three other layers. Each fails on something that the
+middleware layer gets for free.
+
+| Approach | Layer | Pros | Cons |
+|----------|-------|------|------|
+| **tapedeck** | SDK middleware | Provider-agnostic, stream-native, zero infra | Only works with the AI SDK |
+| nock / Polly | HTTP proxy | Generic, works with any HTTP | Breaks on SSE streams, leaks auth, churns on provider wire-format changes |
+| `MockLanguageModelV3` | SDK mock | Fast, no network | Hand-write every turn; collapses on SDK bumps |
+| Agent VCR | MCP boundary | Records MCP interactions | Doesn't record model calls |
+| Braintrust / Langfuse | Hosted eval | Rich dashboards | Requires SaaS, not CI-native |
+
+Three properties drove the choice:
+
+1. **Provider-agnostic by normalizing at the SDK abstraction.** The
+   middleware sees the SDK's already-normalized request
+   (`{ modelProvider, modelId, prompt, tools, … }`) and its normalized
+   response (`content[]` for generate, ordered stream parts for stream).
+   A cassette is keyed on that shape, not on a provider's raw wire
+   bytes. Swap OpenAI for Anthropic and, as long as the prompt and tool
+   schemas hash the same, the same cassette logic applies. An HTTP proxy
+   has to understand each provider's SSE envelope, auth headers, and
+   endpoint shape individually.
+
+2. **Stream-aware by construction.** In `record` mode tapedeck drains
+   the live stream into an ordered array of parts; in `replay` it serves
+   them back through the SDK's own `simulateReadableStream`, so
+   `streamText`, UI message streams, and tool-call streaming all see a
+   genuine `ReadableStream`. A proxy that records raw SSE has to
+   re-chunk and re-time bytes it never fully understood — exactly where
+   nock/Polly fall over.
+
+3. **It survives provider wire-format changes.** Providers re-shape
+   their SSE and JSON envelopes regularly; the SDK absorbs those changes
+   above the wire and below the middleware. A cassette recorded at the
+   SDK abstraction does not care that a provider renamed a field on the
+   wire, because tapedeck never saw the wire.
+
+<Callout kind="info" title="The boundary is the whole point">
+  The SDK's normalized request/response is the contract. tapedeck sits
+  on it, so it inherits whatever provider coverage the SDK has and
+  whatever stream semantics the SDK guarantees — without re-implementing
+  either.
+</Callout>
+
+## Why not a hand-written mock
+
+`MockLanguageModelV3` is the SDK's own escape hatch and it is great for
+unit tests. But for an *agent* — multiple turns, tool calls,
+streaming — you end up authoring every chunk of every turn by hand, then
+re-authoring them on the next SDK bump. tapedeck records that surface
+once from a real run and replays it byte-for-byte. The fixture is
+generated, not transcribed, so it cannot drift from what the model
+actually returned.
+
+(Ironically, tapedeck's *own* test suite uses `MockLanguageModelV3` as
+the upstream — there is no live API call in CI. The mock is the right
+tool for testing the middleware; the middleware is the right tool for
+testing an agent.)
+
+## Consequences
+
+- **Zero infra.** No sidecar, no port, no CA cert to trust. The
+  middleware is a function; the cassette is a JSON file you commit.
+- **One integration point.** Behaviour switches on `mode`
+  (`record` | `replay` | `live`) with no other code changes — see
+  [a miss throws in CI](/decisions/miss-throws-in-ci) for why `replay`
+  is strict.
+- **The cost is scope.** tapedeck only works with the Vercel AI SDK.
+  That is a deliberate trade — see
+  [Vercel AI SDK coupling](/decisions/vercel-ai-sdk-coupling).
+
+## Related
+
+- The middleware itself:
+  [`src/middleware.ts`](https://github.com/nkwib/tapedeck/blob/main/src/middleware.ts)
+- Stream record/replay:
+  [`src/stream-replay.ts`](https://github.com/nkwib/tapedeck/blob/main/src/stream-replay.ts)
+- [Compatibility table](/compatibility)

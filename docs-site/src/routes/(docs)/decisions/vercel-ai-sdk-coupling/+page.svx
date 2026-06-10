@@ -1,0 +1,111 @@
+<script>
+  import Callout from '$lib/components/Callout.svelte';
+</script>
+
+# Vercel AI SDK coupling
+
+## What we did
+
+tapedeck v1 targets **only** the Vercel AI SDK as a peer dependency
+(`ai >= 6.0.0 < 7`), and specifically the language-model **spec v3**
+surface. It is a `LanguageModelV3Middleware`, not a generic recorder. It
+records the SDK's normalized request/response shape; it does not know,
+and deliberately does not abstract over, any provider's raw wire format.
+
+There is no "universal HTTP recorder" mode, no provider plugin system,
+no neutral cassette schema meant to outlive the SDK. A cassette is
+exactly as portable as the SDK abstraction it was recorded against.
+
+## Why bind tightly instead of staying generic
+
+The honest framing: the SDK's spec-v3 request/response shape is the
+structural ceiling on tapedeck's lifetime. If that shape changes
+incompatibly, tapedeck changes with it. We chose to accept that ceiling
+rather than paper over it, for two reasons.
+
+1. **Generic recording is what proxies already do — badly.** A
+   provider-agnostic HTTP recorder (nock/Polly) has to understand every
+   provider's SSE envelope, auth scheme, and endpoint quirks, and it
+   breaks every time one of them shifts. tapedeck's whole advantage is
+   that it normalizes at the SDK's abstraction, which is precisely what
+   makes it provider-agnostic *within* the SDK and stream-native by
+   construction — see
+   [middleware, not a proxy](/decisions/middleware-not-proxy). You can't
+   get that benefit and also be SDK-agnostic; the benefit *is* the
+   coupling.
+
+2. **A neutral cassette schema would lag both the SDK and reality.** To
+   record against the SDK *and* some other framework, the cassette would
+   need a third, "neutral" shape that maps onto both. That shape would
+   trail whichever upstream moved last, and every consumer would have to
+   learn it. The SDK's own `content[]` / stream-part shape is already
+   the lingua franca for AI SDK users; recording it directly means the
+   cassette reads like the SDK and survives provider wire-format changes
+   for free.
+
+## What the coupling buys, and how we manage its risk
+
+Tight coupling is a real risk, so we make the boundary explicit rather
+than hide it behind an abstraction:
+
+1. [`COMPATIBILITY.md`](/compatibility) — a public, dated record of every
+   `ai` version tapedeck is tested against, what "pass" means (typecheck
+   green, suite green, and a record→replay round-trip that stays
+   byte-identical while a changed prompt misses), and the markers for
+   `⚠️ partial` and `❌ fail`.
+
+2. **A pinned peer range.** `peerDependencies: { "ai": ">=6.0.0 <7" }`.
+   Bumping the SDK major requires a tapedeck major — the version
+   boundary is loud, not silent.
+
+3. **The cassette `version` field plus recorded provider/model.** Every
+   cassette carries `"version": "tapedeck@0.1.0"` and the recorded
+   `modelProvider` / `modelId`. If a future tapedeck or SDK changes the
+   format, the version string makes the boundary visible at replay time
+   instead of producing a confusing miss.
+
+```json
+{
+  "version": "tapedeck@0.1.0",
+  "hash": "sha256:abc123…",
+  "request": { "modelProvider": "openai", "modelId": "gpt-4o", "prompt": [ … ] }
+}
+```
+
+<Callout kind="warn" title="If you're running ahead of the matrix">
+  tapedeck is tested against the SDK versions listed in
+  <a href="/compatibility">COMPATIBILITY.md</a>. If your project is on an
+  <code>ai</code> release newer than the latest row there, you're ahead
+  of the tested matrix — a spec-shape change could surface as a
+  <code>CassetteCorruptError</code> or an unexpected replay miss. Check
+  the table before bumping.
+</Callout>
+
+## What v2 might reconsider
+
+The deferred list (see CLAUDE.md) keeps the scope tight for v1 on
+purpose: non-streaming-only `doStream` edge cases, OTel span emission, an
+`npx tapedeck record <script>` CLI, cassette diff/merge tooling, and Edge
+runtime validation are all explicitly post-1.0. None of them weaken the
+coupling — they extend what tapedeck does *within* the SDK abstraction.
+A genuinely SDK-agnostic recorder is not on the roadmap; it would be a
+different, weaker product.
+
+## Consequences
+
+- **Sharp at one thing.** tapedeck is the record/replay tool for AI SDK
+  users, and every distribution surface — the README, the cassette
+  shape, the peer range — reinforces that.
+- **The ceiling is visible.** `COMPATIBILITY.md`, the peer range, and the
+  cassette `version` field make SDK drift a documented, dated, loud event
+  rather than a mystery.
+- **The cost is reach.** If you're not on the Vercel AI SDK, tapedeck is
+  not for you — by design.
+
+## Related
+
+- [Compatibility table](/compatibility)
+- The middleware:
+  [`src/middleware.ts`](https://github.com/nkwib/tapedeck/blob/main/src/middleware.ts)
+- The cassette format:
+  [`src/cassette.ts`](https://github.com/nkwib/tapedeck/blob/main/src/cassette.ts)

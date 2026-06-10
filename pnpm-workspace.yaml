@@ -1,0 +1,8 @@
+# The docs site (docs-site/) is a standalone SvelteKit project with its own
+# lockfile — it is intentionally NOT a workspace package. This file scopes the
+# root workspace to the tapedeck library only and approves the esbuild build
+# script (used by tsup) so installs don't warn.
+packages: []
+
+onlyBuiltDependencies:
+  - esbuild

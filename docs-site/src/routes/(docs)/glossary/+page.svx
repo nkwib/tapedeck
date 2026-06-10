@@ -1,0 +1,93 @@
+# Glossary
+
+A short reference for the vocabulary used across the docs and the
+[Decisions](/decisions) pages.
+
+### cassette
+
+A pretty-printed JSON file holding one recorded model interaction: the
+canonicalized `request`, the recorded `response` (a `generate` content
+array or a `stream` chunk array), and metadata (`version`, `hash`,
+`recordedAt`). Cassettes are hash-addressed, designed to diff cleanly in
+PRs, and committed alongside the tests that depend on them.
+
+### CassetteError family
+
+The shared base class for every error tapedeck throws, so you can catch
+the whole set with one `instanceof CassetteError`. Members:
+`CassetteMissError` (replay found no matching cassette),
+`CassetteSecretError` (a replayed cassette still contains a value a
+redaction matcher would strip), `CassetteCorruptError` (invalid JSON,
+unknown version, or malformed response shape), and `CassetteModeError`
+(an invalid mode string). See [Decisions](/decisions).
+
+<h3 id="chunk-stream-part">chunk / stream part</h3>
+
+One ordered element of a recorded stream — a `text-delta`, a
+`tool-call`, and friends. In `record` mode tapedeck drains the live
+stream and captures these parts in order; in `replay` mode it re-serves
+the same array through [`simulateReadableStream`](#simulatereadablestream).
+
+<h3 id="hash">hash</h3>
+
+The stable, semantic SHA-256 that identifies a cassette. Computed over
+the canonicalized, sorted JSON of
+`&lbrace; modelProvider, modelId, prompt, toolSchemas, maxOutputTokens, temperature, topP &rbrace;`.
+A changed prompt, tool input schema, or sampling param changes the hash
+and forces a re-record; cosmetic tool-description edits do not, because
+schemas are [normalized](#normalization) first.
+
+### live mode
+
+Passthrough. tapedeck does no recording and no lookup — the call goes
+straight to the real model. The recommended mode in local development.
+
+<h3 id="miss">miss</h3>
+
+A `replay`-mode lookup that finds no cassette matching the request
+[hash](#hash). A miss **throws** `CassetteMissError` rather than falling
+back to the network. That is deliberate: a changed prompt or tool schema
+should fail CI loudly and force a re-record, not silently replay stale
+data or make a live call. See [Decisions](/decisions).
+
+<h3 id="normalization">normalization</h3>
+
+The canonicalization applied to tool schemas before hashing
+(`normalizeTools`): descriptions are stripped and keys are sorted, so a
+doc-only change to a tool doesn't invalidate an otherwise-identical
+cassette. The wider request is canonicalized with `stableStringify`.
+
+### record mode
+
+Calls the real model, serializes the request and response into a
+cassette on disk (after [redaction](#redaction-matcher)), and returns
+the live result so your code still runs normally. Used once to capture a
+fixture.
+
+<h3 id="redaction-matcher">redaction matcher</h3>
+
+A key-name rule that strips secrets at **record time**, so they never
+reach disk. Defaults: `apiKey`, `authorization`, `x-api-key`, `bearer`,
+`token` (case-insensitive). Extend via `redact: (string | RegExp)[]` —
+strings match field/header names case-insensitively, RegExps test the
+raw key. A replayed cassette that still contains a value a matcher would
+strip throws `CassetteSecretError`.
+
+### replay mode
+
+Looks up the cassette by [hash](#hash) and serves it offline,
+deterministically, and for free. A [miss](#miss) throws. Streams are
+replayed as genuine streams via
+[`simulateReadableStream`](#simulatereadablestream).
+
+<h3 id="simulatereadablestream">simulateReadableStream</h3>
+
+The AI SDK's own helper that tapedeck uses in `replay` mode to turn a
+recorded [chunk](#chunk-stream-part) array back into a real
+`ReadableStream`. Because replay rides the SDK's own machinery,
+`streamText`, UI message streams, and tool-call streaming all see the
+same surface they would live.
+
+### stream part
+
+See [chunk / stream part](#chunk-stream-part).

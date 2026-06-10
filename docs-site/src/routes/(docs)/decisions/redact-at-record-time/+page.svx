@@ -1,0 +1,119 @@
+<script>
+  import Callout from '$lib/components/Callout.svelte';
+</script>
+
+# Redact at record time
+
+## What we did
+
+Secret redaction happens when a cassette is **written**, not when it is
+read. As `record` mode serializes the request and response, every value
+whose key matches a redaction matcher is replaced with a sentinel before
+anything touches disk.
+
+```ts
+const cassette: Cassette = {
+  version: CASSETTE_VERSION,
+  hash: `sha256:${hash}`,
+  recordedAt: new Date().toISOString(),
+  request: redact(buildRequest(params, model), cfg.matchers),
+  response: redact(/* ... */, cfg.matchers),
+};
+await writeCassetteFile(path, cassette);
+```
+
+The matchers are key-name based. Strings match field and header names
+case-insensitively; RegExps are tested against the raw key. The built-in
+defaults cover the usual offenders, and your `redact` option is merged on
+top:
+
+```ts
+cassetteMiddleware({
+  mode: 'record',
+  redact: ['apiKey', 'authorization', /secret/i],
+});
+```
+
+Default matchers: `apiKey`, `authorization`, `x-api-key`, `bearer`,
+`token` — all case-insensitive.
+
+## Why at record time and not at read time
+
+Redaction's job is to keep secrets off disk. The only way to guarantee
+that is to strip them on the path *to* disk. If redaction ran at read
+time instead:
+
+1. **The secret is already committed.** A redact-on-read design writes
+   the raw value to the cassette and only hides it when displayed. The
+   file in your git history still contains the key. Redaction that
+   doesn't change the bytes on disk is theater.
+2. **The cassette is the artifact you share.** Cassettes get committed,
+   reviewed in PRs, and copied between machines. The protected boundary
+   has to be the file itself, not a rendering of it.
+
+So tapedeck redacts once, at the moment of writing, and the redacted
+cassette is the only cassette that ever exists. Replay reads exactly
+what was written — there is no second, unredacted copy anywhere.
+
+<Callout kind="good" title="Secrets never reach disk">
+  Because redaction runs inside <code>record</code> before
+  <code>writeCassetteFile</code>, the bytes on disk have never contained
+  the secret. There is no scrubbing step you can forget and no plaintext
+  cassette to leak.
+</Callout>
+
+## The other half: replay verifies
+
+Redacting at write time only protects cassettes that tapedeck itself
+wrote. But cassettes get hand-edited, merged, copied from elsewhere, or
+recorded with a matcher set that has since grown. So `replay` does a
+second, independent check: before serving a cassette, it scans both the
+request and response and throws `CassetteSecretError` if any value still
+matches a redaction matcher.
+
+```ts
+function assertNoSecrets(cassette, matchers, path) {
+  const leaks = [
+    ...findUnredacted(cassette.request, matchers).map((p) => `request.${p}`),
+    ...findUnredacted(cassette.response, matchers).map((p) => `response.${p}`),
+  ];
+  if (leaks.length > 0) {
+    throw new CassetteSecretError({ paths: leaks, cassettePath: path });
+  }
+}
+```
+
+This inverts the usual failure: a committed secret **fails the build**
+instead of leaking silently. If a cassette lands in your repo with a
+live `authorization` value still in it, the first `replay` run in CI
+throws and names the offending field paths. The secret is caught at the
+gate, not discovered later in a breach report.
+
+<Callout kind="warn" title="A leaked secret is a red CI run, not a quiet pass">
+  <code>CassetteSecretError</code> lists the exact field paths
+  (<code>request.headers.authorization</code>, …) that still match a
+  matcher. Rotate the key, re-record with the matcher in place, and
+  commit the clean cassette. Replay refuses to serve a cassette that
+  could leak.
+</Callout>
+
+## Consequences
+
+- **Write-time redaction** means the on-disk cassette is born clean.
+- **Read-time verification** means a cassette that *isn't* clean — from
+  any source — fails loudly before it can be served or relied upon.
+- **Matchers are key-name based**, so adding a field name to `redact`
+  protects it everywhere it appears, in request or response, header or
+  body, without per-call wiring.
+- The two checks compose: the same matcher set that strips on write is
+  the one that audits on read, so widening your redaction list
+  retroactively flags older cassettes that predate it.
+
+## Related
+
+- Redaction matchers and walk:
+  [`src/redact.ts`](https://github.com/nkwib/tapedeck/blob/main/src/redact.ts)
+- The replay secret check in
+  [`src/middleware.ts`](https://github.com/nkwib/tapedeck/blob/main/src/middleware.ts)
+- Error types:
+  [`src/errors.ts`](https://github.com/nkwib/tapedeck/blob/main/src/errors.ts)
