@@ -8,7 +8,7 @@
 npm install -D @nkwib/tapedeck
 ```
 
-> Requires `ai` v6 (`>=6.0.0 <7`). tapedeck operates at the `wrapLanguageModel` middleware layer (model spec **v3**), so it's provider-agnostic and stream-aware by construction — no HTTP proxy, no infra.
+> Requires `ai` v6 or v7 (`>=6.0.0 <8`). tapedeck operates at the `wrapLanguageModel` middleware layer (model spec **v3**), so it's provider-agnostic and stream-aware by construction — no HTTP proxy, no infra.
 
 ---
 

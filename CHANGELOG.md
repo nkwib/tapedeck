@@ -4,6 +4,19 @@ All notable changes to tapedeck are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 semantic versioning once it reaches 1.0.0.
 
+## 0.3.1 - 2026-08-10
+
+### Changed
+
+- **`ai` peer range widened to `>=6.0.0 <8`.** `ai@7` keeps the language-model
+  spec v3 middleware surface tapedeck wraps: the weekly compat cron passed
+  typecheck, the full suite, and the record/replay round trip against 7.0.37
+  and 7.0.58, but the `<7` pin made the package uninstallable next to a fresh
+  `npm i ai`. No runtime changes; cassette formats and hashes are untouched.
+- CI runs the suite against the latest of each supported `ai` major (6 and 7)
+  on every push and PR, instead of only the lockfile's 6.x plus the weekly
+  `ai@latest` cron.
+
 ## 0.3.0 — 2026-06-10
 
 ### Added
