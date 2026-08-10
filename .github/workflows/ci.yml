@@ -9,6 +9,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Latest of each supported ai major (peer range >=6.0.0 <8).
+        ai-major: ['6', '7']
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -19,6 +24,8 @@ jobs:
           node-version: '20'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - name: Pin ai@${{ matrix.ai-major }}
+        run: pnpm add -D ai@${{ matrix.ai-major }} --silent
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build

@@ -13,14 +13,18 @@ of what tapedeck is tested against.
 | 6.0.0      | 2026-06-10  | 0.2.0    | ✅ pass | Same spec surface as the launch row. Hash digests and cassette format unchanged — 0.1.0 cassettes replay as-is. |
 | 6.0.0      | 2026-06-10  | 0.1.0    | ✅ pass | Launch row. Model spec v3: `doGenerate` returns `content[]`; `doStream` yields `text-delta` / `tool-call` parts. |
 | 7.0.37 | 2026-07-27 | 0.3.0 | ✅ pass | Weekly cron. |
+| 7.0.58 | 2026-08-03 | 0.3.0 | ✅ pass | Weekly cron; peer range widened to `<8` in 0.3.1. |
 
 ## Pinned peer range
 
 ```json
-{ "peerDependencies": { "ai": ">=6.0.0 <7" } }
+{ "peerDependencies": { "ai": ">=6.0.0 <8" } }
 ```
 
-Bumping the SDK major requires a tapedeck major. The cassette `version` field
+A new SDK major joins the peer range only after the weekly cron proves it
+green (`ai@7` passed at 7.0.37 and 7.0.58, so 0.3.1 widened the pin to `<8`).
+What forces a tapedeck major is a language-model *spec* shape change, not an
+SDK major that keeps spec v3 intact. The cassette `version` field
 (`tapedeck@<pkg>`) and the recorded `modelProvider` / `modelId` make a format
 boundary loud at replay time.
 
