@@ -1,0 +1,21 @@
+{
+  // The build tsconfig emits from `src` only. The `*.test-d.ts` type tests are
+  // checked with this config (by `vitest --typecheck`), which drops the emit
+  // settings and widens the roots.
+  //
+  // Runtime test files stay out: they type their fixtures with the spec v3
+  // types and so do not compile against ai@7's v4 call options. That is a
+  // fixture-typing gap in the tests, not a library one, and pulling it in here
+  // would drown the signal these type tests exist to give.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": ["src/**/*", "test/**/*.test-d.ts"],
+  "exclude": ["node_modules", "dist"]
+}

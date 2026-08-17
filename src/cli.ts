@@ -3,6 +3,7 @@
 //
 //   tapedeck record <script> [args...]   run a script with CASSETTE_MODE=record
 //   tapedeck replay <script> [args...]   run a script with CASSETTE_MODE=replay
+//   tapedeck compare <script> [args...]  run a script with CASSETTE_MODE=compare
 //   tapedeck ls [dir]                    list cassettes in a directory
 //   tapedeck diff <a> <b>                semantic diff of two cassette files
 //   tapedeck merge <src> <dest>          merge cassette directories (--force overwrites conflicts)
@@ -24,6 +25,7 @@ const HELP = `tapedeck — record/replay cassettes for the Vercel AI SDK
 Usage:
   tapedeck record <script> [args...]   Run <script> with CASSETTE_MODE=record
   tapedeck replay <script> [args...]   Run <script> with CASSETTE_MODE=replay
+  tapedeck compare <script> [args...]  Run <script> with CASSETTE_MODE=compare
   tapedeck ls [dir]                    List cassettes (default: ./cassettes)
   tapedeck diff <a> <b>                Semantic diff of two cassette files
   tapedeck merge <src> <dest>          Merge cassettes from <src> into <dest>
@@ -35,6 +37,11 @@ Options:
 
 <script> is run with Node if it is a file path; otherwise it is treated as a
 command on PATH (e.g. \`tapedeck record pnpm test\`).
+
+\`compare\` calls the live model and reports how it drifted from the recorded
+cassette without rewriting it. Drift throws CassetteDriftError, so the child
+process exits nonzero and so does this command: \`tapedeck compare pnpm test\`
+is a CI drift gate.
 `;
 
 function version(): string {
@@ -45,7 +52,7 @@ function version(): string {
 }
 
 /** Run a script/command with CASSETTE_MODE set; resolves to its exit code. */
-function runWithMode(mode: 'record' | 'replay', argv: string[]): Promise<number> {
+function runWithMode(mode: 'record' | 'replay' | 'compare', argv: string[]): Promise<number> {
   const [script, ...args] = argv;
   if (!script) {
     process.stderr.write(`tapedeck ${mode}: missing <script>\n\n${HELP}`);
@@ -154,6 +161,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     case 'record':
     case 'replay':
+    case 'compare':
       return runWithMode(command, rest);
     case 'ls':
       return ls(rest[0]);

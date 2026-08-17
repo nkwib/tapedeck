@@ -34,6 +34,13 @@ jobs:
           node dist/cli.js --version
           node dist/cli.js --help > /dev/null
           node dist/cli.js ls ./does-not-exist | grep -q "No cassettes"
+          node dist/cli.js --help | grep -q "compare <script>"
+          # compare is a CI drift gate: it must propagate the child's exit code
+          set +e
+          node dist/cli.js compare node -e "process.exit(3)"
+          code=$?
+          set -e
+          test "$code" = "3"
       - name: Cross-bundle smoke test (dist entry points)
         run: pnpm smoke
 

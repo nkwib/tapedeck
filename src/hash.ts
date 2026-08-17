@@ -6,11 +6,11 @@
 // is what makes a changed prompt fail CI instead of silently replaying stale data.
 
 import type {
-  LanguageModelV3CallOptions,
   LanguageModelV3FunctionTool,
   LanguageModelV3Prompt,
   LanguageModelV3ProviderTool,
 } from '@ai-sdk/provider';
+import type { SpecCallOptions, SpecModel } from './spec.js';
 
 /** The subset of a request that determines cassette identity. */
 export interface CassetteRequestKey {
@@ -94,16 +94,20 @@ export async function computeCassetteHash(request: CassetteRequestKey): Promise<
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** Build a {@link CassetteRequestKey} from live call options + model identity. */
+/**
+ * Build a {@link CassetteRequestKey} from live call options + model identity.
+ * `prompt` and `tools` are opaque at the middleware boundary (spec v3 and v4
+ * disagree on their part shapes) but are hashed verbatim either way.
+ */
 export function requestKeyFromCall(
-  params: LanguageModelV3CallOptions,
-  model: { provider: string; modelId: string },
+  params: SpecCallOptions,
+  model: SpecModel,
 ): CassetteRequestKey {
   return {
     modelProvider: model.provider,
     modelId: model.modelId,
-    prompt: params.prompt,
-    tools: params.tools,
+    prompt: params.prompt as CassetteRequestKey['prompt'],
+    tools: params.tools as CassetteRequestKey['tools'],
     maxOutputTokens: params.maxOutputTokens,
     temperature: params.temperature,
     topP: params.topP,

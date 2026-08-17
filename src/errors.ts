@@ -4,6 +4,8 @@
 // whole family with a single `instanceof` check, while still being able to
 // discriminate on the concrete subclass for tailored handling.
 
+import { formatCompareResult, type CassetteCompareResult } from './compare.js';
+
 /** Base class for all tapedeck errors. */
 export class CassetteError extends Error {
   constructor(message: string) {
@@ -79,8 +81,31 @@ export class CassetteModeError extends CassetteError {
 
   constructor(mode: string) {
     super(
-      `tapedeck: invalid mode "${mode}". Expected one of: record, replay, live.`,
+      `tapedeck: invalid mode "${mode}". Expected one of: record, replay, live, compare.`,
     );
     this.mode = mode;
+  }
+}
+
+/**
+ * Thrown in `compare` mode when the live response diverges from the cassette.
+ *
+ * This is the default failure path so a drifting fixture can never pass
+ * silently: register `onCompare` to take ownership of the policy (collect every
+ * report, fail the suite at the end) and nothing is thrown.
+ */
+export class CassetteDriftError extends CassetteError {
+  /** The full structured report, for programmatic handling. */
+  readonly result: CassetteCompareResult;
+  readonly cassettePath: string;
+
+  constructor(result: CassetteCompareResult) {
+    super(
+      `tapedeck: live response drifted from the cassette.\n  ` +
+        `${formatCompareResult(result)}\n` +
+        `  Re-record with CASSETTE_MODE=record if the new behaviour is intended.`,
+    );
+    this.result = result;
+    this.cassettePath = result.cassettePath;
   }
 }
