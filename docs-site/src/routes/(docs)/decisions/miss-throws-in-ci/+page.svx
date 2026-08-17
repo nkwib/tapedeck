@@ -22,16 +22,19 @@ if (cfg.mode === 'replay') {
 }
 ```
 
-There are three modes, and only one of them is strict:
+There are four modes. Two of them look a cassette up, and both refuse to
+proceed without one:
 
 | Mode | Behaviour |
 |------|-----------|
 | `record` | Calls the real model, serializes request + response to a cassette, returns the live result. |
 | `replay` | Looks up the cassette by hash, serves it. **A miss throws.** |
+| `compare` | Calls the real model *and* loads the cassette, reports the drift, returns the live result. Never writes, and **a miss throws** here too. |
 | `live` | Passthrough. No recording, no lookup. |
 
 The recommended setup is `live` in development, `record` once to capture
-a fixture, and **`replay` in CI**.
+a fixture, **`replay` in CI**, and `compare` on a schedule to catch the
+model drifting away from the fixture.
 
 <CassetteFlow highlight="replay" />
 
@@ -96,6 +99,8 @@ changes.
   rate limits in the replay path.
 - **Drift is impossible to ignore.** A changed prompt or tool schema
   cannot pass against an old fixture; it must miss and be re-recorded.
+  The mirror image, a fixture the *model* drifted away from, is what
+  [`compare` reports](/decisions/compare-never-writes) instead of hiding.
 - **The workflow is explicit.** `record` to capture, commit the
   cassette, `replay` to enforce. The
   [`withCassette`](https://github.com/nkwib/tapedeck/blob/main/src/vitest.ts)

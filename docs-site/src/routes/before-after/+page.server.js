@@ -40,7 +40,7 @@ import { cassetteMiddleware } from '@nkwib/tapedeck';
 const model = wrapLanguageModel({
   model: openai('gpt-4o'),
   middleware: cassetteMiddleware({
-    mode: process.env.CASSETTE_MODE ?? 'live', // record | replay | live
+    mode: process.env.CASSETTE_MODE ?? 'live', // record | replay | compare | live
     cassetteDir: './cassettes',
     redact: ['apiKey', 'authorization', /token/i],
   }),

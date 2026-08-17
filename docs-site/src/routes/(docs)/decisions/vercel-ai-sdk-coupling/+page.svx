@@ -6,11 +6,11 @@
 
 ## What we did
 
-tapedeck v1 targets **only** the Vercel AI SDK as a peer dependency
-(`ai >= 6.0.0 < 7`), and specifically the language-model **spec v3**
-surface. It is a `LanguageModelV3Middleware`, not a generic recorder. It
-records the SDK's normalized request/response shape; it does not know,
-and deliberately does not abstract over, any provider's raw wire format.
+tapedeck targets **only** the Vercel AI SDK as a peer dependency
+(`ai >= 6.0.0 < 8`), and specifically its language-model middleware
+surface. It is a middleware, not a generic recorder. It records the SDK's
+normalized request/response shape; it does not know, and deliberately
+does not abstract over, any provider's raw wire format.
 
 There is no "universal HTTP recorder" mode, no provider plugin system,
 no neutral cassette schema meant to outlive the SDK. A cassette is
@@ -18,10 +18,10 @@ exactly as portable as the SDK abstraction it was recorded against.
 
 ## Why bind tightly instead of staying generic
 
-The honest framing: the SDK's spec-v3 request/response shape is the
-structural ceiling on tapedeck's lifetime. If that shape changes
-incompatibly, tapedeck changes with it. We chose to accept that ceiling
-rather than paper over it, for two reasons.
+The honest framing: the SDK's request/response shape at the middleware
+layer is the structural ceiling on tapedeck's lifetime. If that shape
+changes incompatibly, tapedeck changes with it. We chose to accept that
+ceiling rather than paper over it, for two reasons.
 
 1. **Generic recording is what proxies already do — badly.** A
    provider-agnostic HTTP recorder (nock/Polly) has to understand every
@@ -54,9 +54,16 @@ than hide it behind an abstraction:
    byte-identical while a changed prompt misses), and the markers for
    `⚠️ partial` and `❌ fail`.
 
-2. **A pinned peer range.** `peerDependencies: { "ai": ">=6.0.0 <7" }`.
-   Bumping the SDK major requires a tapedeck major — the version
-   boundary is loud, not silent.
+2. **A peer range that only widens on evidence.**
+   `peerDependencies: { "ai": ">=6.0.0 <8" }`. A new SDK major joins it
+   after the weekly compat cron proves it green, which is how `ai@7` got
+   in. What forces a tapedeck major is a *spec* shape change deep enough
+   to break the fields tapedeck reads, not an SDK major that renumbers
+   the spec: the middleware is
+   [typed structurally](/api#TapedeckMiddleware) over those fields, so it
+   satisfies spec v3 (`ai@6`) and spec v4 (`ai@7`) from one object, and a
+   spec v5 would surface as a red type test rather than a silent
+   consumer-side cast.
 
 3. **The cassette `version` field plus recorded provider/model.** Every
    cassette carries `"version": "tapedeck@0.1.0"` and the recorded
@@ -83,13 +90,14 @@ than hide it behind an abstraction:
 
 ## What v2 might reconsider
 
-The deferred list (see CLAUDE.md) keeps the scope tight for v1 on
-purpose: non-streaming-only `doStream` edge cases, OTel span emission, an
-`npx tapedeck record <script>` CLI, cassette diff/merge tooling, and Edge
-runtime validation are all explicitly post-1.0. None of them weaken the
-coupling — they extend what tapedeck does *within* the SDK abstraction.
-A genuinely SDK-agnostic recorder is not on the roadmap; it would be a
-different, weaker product.
+The deferred list kept the first cut tight on purpose, and what has
+landed since stayed inside the boundary: OTel span emission, the
+`tapedeck` CLI, cassette diff/merge tooling, and the edge-safe core in
+0.2.0, multi-interaction named cassettes in 0.3.0, and
+[drift detection](/decisions/compare-never-writes) in 0.4.0. None of them
+weaken the coupling: they extend what tapedeck does *within* the SDK
+abstraction. A genuinely SDK-agnostic recorder is not on the roadmap; it
+would be a different, weaker product.
 
 ## Consequences
 

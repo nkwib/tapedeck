@@ -10,7 +10,8 @@ Every public symbol exported from `@nkwib/tapedeck`. Source of truth:
 
 | Export | Kind | What it does |
 |---|---|---|
-| [`cassetteMiddleware`](#cassetteMiddleware) | function | Record/replay/live middleware for `wrapLanguageModel`. |
+| [`cassetteMiddleware`](#cassetteMiddleware) | function | Record/replay/compare/live middleware for `wrapLanguageModel`. |
+| [`TapedeckMiddleware`](#TapedeckMiddleware) | type | The middleware's return type: assignable to spec v3 and v4. |
 | [`withCassette`](#withCassette) | function | Vitest helper: pin a test to a named cassette. |
 | [`toFollowRoute`](#toFollowRoute) | function | Vitest matcher: assert a tool trajectory follows a ToolRoute router. |
 | [`CassetteError`](#CassetteError) | class | Base class for the whole error family. |
@@ -18,6 +19,13 @@ Every public symbol exported from `@nkwib/tapedeck`. Source of truth:
 | [`CassetteSecretError`](#CassetteSecretError) | class | A replayed cassette still holds unredacted secrets. |
 | [`CassetteCorruptError`](#CassetteCorruptError) | class | Unreadable cassette: bad JSON, version, or shape. |
 | [`CassetteModeError`](#CassetteModeError) | class | Invalid mode string. |
+| [`CassetteDriftError`](#CassetteDriftError) | class | `compare` found drift and no `onCompare` handler owned it. |
+| [`compareCassetteResponses`](#compareCassetteResponses) | function | Compare a live response against a recorded one. |
+| [`summarizeResponse`](#summarizeResponse) | function | Reduce a response to text, tool calls, and finish reason. |
+| [`formatCompareResult`](#formatCompareResult) | function | Render a compare result as human-readable text. |
+| [`CassetteCompareResult`](#CassetteCompareResult) | type | The structured drift report. |
+| [`ResponseSummary`](#ResponseSummary) | type | The behavioural shape of one response. |
+| [`ToolCallSummary`](#ToolCallSummary) | type | One tool call reduced to name plus canonical input. |
 | [`computeCassetteHash`](#computeCassetteHash) | function | The stable hash used for cassette identity (async, WebCrypto). |
 | [`loadCassette`](#loadCassette) | function | Read a hash-addressed cassette from a directory. |
 | [`saveCassette`](#saveCassette) | function | Write a hash-addressed cassette into a directory. |
@@ -44,10 +52,11 @@ Every public symbol exported from `@nkwib/tapedeck`. Source of truth:
   id="cassetteMiddleware"
   name="cassetteMiddleware"
   kind="function"
-  signature={`function cassetteMiddleware(options?: CassetteMiddlewareOptions): LanguageModelV3Middleware`}
+  signature={`function cassetteMiddleware(options?: CassetteMiddlewareOptions): TapedeckMiddleware`}
 />
 
-Returns an AI SDK `LanguageModelV3Middleware` for use with `wrapLanguageModel`.
+Returns a [`TapedeckMiddleware`](#TapedeckMiddleware) for use with
+`wrapLanguageModel`, assignable under both supported `ai` majors with no cast.
 Intercepts both `doGenerate` (one-shot) and `doStream` (streaming). Behaviour is
 driven by `mode` — typically read from an env var, so you switch between recording
 and replaying with no other code changes. A bad static `mode` throws
@@ -55,12 +64,13 @@ and replaying with no other code changes. A bad static `mode` throws
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `mode` | `'record' \| 'replay' \| 'live'` | `'live'` | Operating mode. `record` calls the real model and persists request + response; `replay` serves a cassette by hash and throws on a miss; `live` is passthrough. |
+| `mode` | `'record' \| 'replay' \| 'compare' \| 'live'` | `'live'` | Operating mode. `record` calls the real model and persists request + response; `replay` serves a cassette by hash and throws on a miss; `compare` calls the model *and* reads the cassette, reports the drift, and never writes; `live` is passthrough. |
 | `cassetteDir` | `string` | `'./cassettes'` | Directory cassettes are read from / written to. |
 | `redact` | `(string \| RegExp)[]` | `[]` | Extra key matchers, merged with [`DEFAULT_REDACT`](#DEFAULT_REDACT). Strings match field/header names case-insensitively; RegExps test the raw key. |
 | `cassetteName` | `string` | &mdash; | Force a specific filename instead of hash-addressed lookup. Named cassettes are multi-interaction: every call is stored in the file keyed by request hash. Mostly used internally by [`withCassette`](#withCassette); set it for fixed fixtures. |
 | `store` | `CassetteStore` | filesystem | Storage backend (`read`/`write`/`list`). Pass [`memoryCassetteStore()`](#memoryCassetteStore) on edge runtimes where there is no filesystem. |
-| `tracer` | `TapedeckTracer` | &mdash; | OTel-compatible tracer (e.g. `trace.getTracer('tapedeck')`). Emits `tapedeck.generate` / `tapedeck.stream` spans with mode, hash, path, and hit/miss attributes; misses record the exception with an error status. |
+| `tracer` | `TapedeckTracer` | &mdash; | OTel-compatible tracer (e.g. `trace.getTracer('tapedeck')`). Emits `tapedeck.generate` / `tapedeck.stream` spans with mode, hash, path, and hit/miss attributes; misses record the exception with an error status. `compare` spans also carry `tapedeck.compare_equal`. |
+| `onCompare` | `(result: CassetteCompareResult) => void \| Promise<void>` | none | `compare` mode only. Called once per compared call with the [report](#CassetteCompareResult), whether or not anything diverged. Registering a handler hands you the failure policy and suppresses [`CassetteDriftError`](#CassetteDriftError); with no handler the first diverging call throws. |
 
 ```ts
 import { openai } from '@ai-sdk/openai';
@@ -70,7 +80,7 @@ import { cassetteMiddleware } from '@nkwib/tapedeck';
 const model = wrapLanguageModel({
   model: openai('gpt-4o'),
   middleware: cassetteMiddleware({
-    mode: process.env.CASSETTE_MODE ?? 'live', // record | replay | live
+    mode: process.env.CASSETTE_MODE ?? 'live', // record | replay | compare | live
     cassetteDir: './cassettes',
     redact: ['apiKey', 'authorization', /token/i],
   }),
@@ -89,6 +99,35 @@ When the ambient [`withCassette`](#withCassette) context is active, its `mode`,
   <code>ReadableStream</code> via the SDK's own
   <code>simulateReadableStream</code>.
 </Callout>
+
+<ApiSignature
+  id="TapedeckMiddleware"
+  name="TapedeckMiddleware"
+  kind="type"
+  signature={`interface TapedeckMiddleware {
+  readonly specificationVersion: 'v3';
+  wrapGenerate: <GENERATE>(options: WrapGenerateOptions<GENERATE>) => Promise<GENERATE>;
+  wrapStream: <STREAM>(options: WrapStreamOptions<STREAM>) => Promise<STREAM>;
+}`}
+/>
+
+What [`cassetteMiddleware`](#cassetteMiddleware) returns. `ai@6` takes a
+language-model spec v3 middleware and `ai@7` takes spec v4; the two concrete
+types are mutually unassignable, so a middleware annotated with either one
+forces consumers of the other major to write
+`as unknown as LanguageModelMiddleware`. `TapedeckMiddleware` is typed
+structurally instead: it declares only the fields tapedeck reads and stays
+generic in the result type, so whatever `doGenerate` hands in is what
+`wrapGenerate` hands back, and one object is assignable to both spec surfaces
+with no cast on either side.
+
+`specificationVersion` stays `'v3'` because v4 hosts accept any string while v3
+hosts accept only `'v3'`. The companion types `SpecModel`, `SpecCallOptions`,
+`WrapGenerateOptions<GENERATE>`, and `WrapStreamOptions<STREAM>` are exported
+too: `SpecCallOptions` keeps `prompt` and `tools` as `unknown` on purpose, since
+tapedeck hashes and serializes them verbatim rather than interpreting them.
+`test/types.test-d.ts` asserts assignability to both spec surfaces on every CI
+run. See [Compatibility](/compatibility).
 
 <ApiSignature
   id="withCassette"
@@ -217,8 +256,174 @@ match the call (a `stream` cassette served to `doGenerate`, or vice versa).
 />
 
 Thrown when an invalid mode string is supplied — anything other than `record`,
-`replay`, or `live`. Raised eagerly at middleware construction when `mode` is
-statically set, and otherwise when the ambient context resolves.
+`replay`, `compare`, or `live`. Raised eagerly at middleware construction when
+`mode` is statically set, and otherwise when the ambient context resolves.
+
+<ApiSignature
+  id="CassetteDriftError"
+  name="CassetteDriftError"
+  kind="class"
+  signature={`class CassetteDriftError extends CassetteError {
+  readonly result: CassetteCompareResult;
+  readonly cassettePath: string;
+}`}
+/>
+
+Thrown in `compare` mode when the live response diverged from the cassette and
+no `onCompare` handler took ownership of the policy. The message carries the
+rendered report (see [`formatCompareResult`](#formatCompareResult)) plus a hint
+to re-record if the new behaviour is intended; `result` carries the same report
+structurally. This is the default failure path, so drift can never pass
+silently, and it is what makes `npx tapedeck compare pnpm test` exit nonzero.
+
+Register `onCompare` and nothing is thrown: you get every report, drift or not,
+and decide when the suite fails.
+
+```ts
+const drifted: CassetteCompareResult[] = [];
+
+cassetteMiddleware({
+  mode: 'compare',
+  onCompare(result) {
+    if (!result.equal) drifted.push(result);
+  },
+});
+
+afterAll(() => {
+  if (drifted.length > 0) throw new Error(drifted.map(formatCompareResult).join('\n\n'));
+});
+```
+
+<ApiSignature
+  id="compareCassetteResponses"
+  name="compareCassetteResponses"
+  kind="function"
+  signature={`function compareCassetteResponses(
+  recorded: CassetteResponse,
+  live: CassetteResponse,
+  context: CompareContext
+): CassetteCompareResult`}
+/>
+
+The drift comparison itself, usable outside the middleware. Pure: it reads both
+responses and returns a report, and never touches a cassette. `context` is the
+identity carried into the report
+(`&lbrace; hash, cassettePath, modelProvider, modelId &rbrace;`).
+
+Three signals decide the verdict. The **tool-call trajectory** must have the
+same tool names in the same order with the same inputs, where inputs are
+canonicalized as sorted JSON so key order is never drift. The **finish reason**
+compares the unified label (`stop`, `tool-calls`, …), not the provider-raw one.
+**Text** is classified `exact`, `normalized` (equal after trimming, collapsing
+whitespace, and lowercasing), or `different`. `result.equal` is true when the
+kind is unchanged, the trajectory and finish reason match, and the text is no
+worse than `normalized`: prose is not a contract, the trajectory is. There is no
+similarity score. See
+[compare never writes](/decisions/compare-never-writes).
+
+<Callout kind="info" title="tapedeck compare: the CLI drift gate">
+  <code>tapedeck compare &lt;script&gt; [args...]</code> runs a script (or a
+  command on PATH, e.g. <code>tapedeck compare pnpm test</code>) with
+  <code>CASSETTE_MODE=compare</code> and propagates the child's exit code, so an
+  unhandled <code>CassetteDriftError</code> fails the job. It sits alongside
+  <code>tapedeck record</code> and <code>tapedeck replay</code>, and like them it
+  is the only thing the command does: no cassette is written, read, or moved by
+  the CLI itself.
+</Callout>
+
+<ApiSignature
+  id="summarizeResponse"
+  name="summarizeResponse"
+  kind="function"
+  signature={`function summarizeResponse(response: CassetteResponse): ResponseSummary`}
+/>
+
+Reduce a recorded or live response to the parts compare looks at: all assistant
+text concatenated in emission order, the tool calls in emission order, and the
+unified finish reason. Works on both response kinds, flattening a `generate`
+content array or a `stream` chunk array into the same shape, which is what lets
+compare notice that a call that used to stream now returns one-shot.
+
+<ApiSignature
+  id="formatCompareResult"
+  name="formatCompareResult"
+  kind="function"
+  signature={`function formatCompareResult(result: CassetteCompareResult): string`}
+/>
+
+Render a report as the human-readable text
+[`CassetteDriftError`](#CassetteDriftError) embeds. Only the diverging signals
+are printed, trajectories render as `search(…) -> checkout(…)`, and text sides
+are JSON-quoted so trailing whitespace and newlines are visible.
+
+```text
+tapedeck: live response drifted from the cassette.
+  sha256:9f2c… (stream, openai/gpt-4o)
+  cassette: ./cassettes/checkout-flow.json
+  tool calls: call 2: tool 'checkout' != 'refund'
+    cassette: search({"q":"shirt"}) -> checkout({"id":1})
+    live:     search({"q":"shirt"}) -> refund({"id":1})
+  finish reason: stop -> tool-calls
+```
+
+<ApiSignature
+  id="CassetteCompareResult"
+  name="CassetteCompareResult"
+  kind="type"
+  signature={`interface CassetteCompareResult extends CompareContext {
+  equal: boolean;
+  kind: 'generate' | 'stream';
+  kindChanged: boolean;
+  text: { status: 'exact' | 'normalized' | 'different'; recorded: string; live: string };
+  toolCalls: {
+    equal: boolean;
+    recorded: ToolCallSummary[];
+    live: ToolCallSummary[];
+    divergedAt: number | null;
+    reason: string | null;
+  };
+  finishReason: { equal: boolean; recorded: string | null; live: string | null };
+}`}
+/>
+
+The structured report handed to `onCompare` and carried by
+[`CassetteDriftError`](#CassetteDriftError). `divergedAt` is the index of the
+first divergent tool call and `reason` explains it in one line
+(`call 2: tool 'checkout' != 'refund'`), so a reviewer can agree that it is
+drift without trusting a number. `text.status` is always reported even when
+`equal` is true, which is the hook for a stricter policy. The individual pieces
+are exported as `CompareTextResult`, `CompareToolCalls`, `CompareFinishReason`,
+`TextDivergence`, and `CompareContext`.
+
+<ApiSignature
+  id="ResponseSummary"
+  name="ResponseSummary"
+  kind="type"
+  signature={`interface ResponseSummary {
+  kind: 'generate' | 'stream';
+  text: string;
+  toolCalls: ToolCallSummary[];
+  finishReason: string | null;
+}`}
+/>
+
+The behavioural shape of a response: everything compare looks at, nothing else.
+Returned by [`summarizeResponse`](#summarizeResponse). `finishReason` is the
+unified label, or `null` when the response carries none.
+
+<ApiSignature
+  id="ToolCallSummary"
+  name="ToolCallSummary"
+  kind="type"
+  signature={`interface ToolCallSummary {
+  toolName: string;
+  input: string;
+}`}
+/>
+
+One tool call, reduced to the parts that define an agent's trajectory. `input`
+is the tool input as canonical JSON with keys sorted, so a reordered key never
+reads as drift; when the input is not valid JSON the raw string is kept.
 
 <ApiSignature
   id="computeCassetteHash"

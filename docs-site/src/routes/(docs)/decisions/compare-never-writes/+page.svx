@@ -1,0 +1,137 @@
+<script>
+  import Callout from '$lib/components/Callout.svelte';
+</script>
+
+# Compare never writes
+
+## What we did
+
+`compare` mode calls the live model *and* loads the recorded cassette,
+reports how the two diverged, and returns the live result to your code.
+It does not update the cassette, not even when the live response looks
+better than the recorded one. The whole mode is a read plus a report:
+
+```ts
+async function reportComparison(cfg, recorded, live, context, span) {
+  const result = compareCassetteResponses(recorded, live, context);
+  span?.setAttribute('tapedeck.compare_equal', result.equal);
+  if (cfg.onCompare) {
+    await cfg.onCompare(result);
+    return;
+  }
+  if (!result.equal) throw new CassetteDriftError(result);
+}
+```
+
+The second half of the decision is what counts as a divergence.
+`result.equal` is true when the tool-call trajectory and the finish
+reason match and the text is no worse than `normalized`, meaning equal
+after trimming, collapsing whitespace, and lowercasing. A changed
+trajectory is drift. Reworded prose is not.
+
+## Why the cassette is never rewritten
+
+Writing on compare would be one line of code, and it would quietly
+destroy the thing compare exists to produce: a difference somebody has to
+look at.
+
+1. **A self-healing fixture cannot fail.** If compare rewrote the
+   cassette whenever the live response moved, the next `replay` run would
+   pass against the new recording and nothing would ever be red. The
+   check would report drift once, to a log, and then erase its own
+   evidence. That is the fixture-rot failure mode
+   [a miss throws in CI](/decisions/miss-throws-in-ci) was written to
+   avoid, reintroduced through the back door.
+2. **A cassette is a reviewed artifact.** Cassettes are committed, read
+   in pull requests, and diffed like code. Re-recording is therefore a
+   human decision with a diff attached: run `record`, look at what
+   changed, commit it. A background process that mutates committed
+   fixtures during a scheduled job turns that review into a surprise in
+   somebody's next `git pull`.
+3. **The live response is not automatically the better one.** compare
+   runs against a nondeterministic model. One sample is evidence that the
+   fixture may be stale, not proof that this particular sample is the new
+   truth. Promoting a single live sample to fixture status is a decision
+   about intent, and tapedeck does not have the intent.
+
+So compare stays pure. `compareCassetteResponses` reads two responses and
+returns a report; the store is never touched; the caller receives the
+live result, which makes compare a live run with a drift check stapled
+on. The only two outcomes are a report handed to `onCompare` and a
+`CassetteDriftError` thrown when nobody registered one.
+
+<Callout kind="warn" title="Drift means decide, not auto-fix">
+  <code>CassetteDriftError</code> carries the full report and a hint:
+  re-record with <code>CASSETTE_MODE=record</code> <em>if the new
+  behaviour is intended</em>. That "if" is the point. Either the model
+  moved and you accept the new trajectory, or the model moved and your
+  agent just broke. Only a person can tell those apart.
+</Callout>
+
+## Why text is not a contract and the trajectory is
+
+The hard part of drift detection is not noticing that two responses
+differ. It is deciding which differences matter. tapedeck draws that line
+in one place, deliberately:
+
+- **The tool-call trajectory is the contract.** Which tools an agent
+  calls, in what order, with what inputs, is what the agent *does*. If a
+  checkout flow used to call `search` then `checkout` and now calls
+  `search` then `refund`, that is a behavioural change however elegantly
+  the model narrates it. Inputs are compared as canonical JSON with keys
+  sorted, so a reordered key is never mistaken for drift.
+- **Prose is not.** The same model, asked the same question twice, will
+  phrase the answer differently. Treating every reworded sentence as a
+  failure produces a check that cries wolf on the first run and gets
+  muted on the second. So text that is identical after trimming,
+  collapsing whitespace, and lowercasing counts as unchanged.
+- **The finish reason sits with the trajectory.** The unified label
+  (`stop`, `tool-calls`, …) says how the turn ended, which is
+  structural. The provider-raw reason is not compared, because it churns
+  for reasons that have nothing to do with your agent.
+
+Text is still classified as `exact`, `normalized`, or `different`, and
+`different` does make `result.equal` false. What `normalized` buys is a
+tolerance band wide enough for whitespace and casing and no wider.
+
+The alternative we rejected was a similarity score. A cosine distance
+over embeddings, or a token-overlap ratio, would let anyone tune a
+threshold until the check went quiet. Worse, it produces failures nobody
+can argue with on the merits: a reviewer cannot look at `0.87` and decide
+whether the agent broke. Every signal tapedeck reports is a fact a human
+can check in the diff, and `result.text.status` is in every report even
+when `equal` is true, so a team that *does* want prose to be a contract
+can enforce that in four lines of `onCompare`.
+
+<Callout kind="info" title="Strictness is a policy, not a setting">
+  There is no <code>strictText</code> option. The report carries every
+  signal it measured, so a stricter rule is an <code>onCompare</code>
+  handler you own, and the default stays the one a reviewer will agree
+  with.
+</Callout>
+
+## Consequences
+
+- **The cassette is stable.** A compare run leaves the working tree
+  clean, which is what lets it run on a schedule with API keys and
+  without a commit step.
+- **Drift is reported, never absorbed.** With no handler the first
+  diverging call throws, so `npx tapedeck compare pnpm test` exits
+  nonzero and a scheduled job goes red.
+- **The verdict is explainable.** Every failure names the diverging tool
+  call, the finish reason, or the text, in a report a reviewer can read
+  without trusting a number.
+- **Prose changes are invisible by default.** A team that wants stricter
+  text matching has to write the policy down in `onCompare`, which is the
+  right place for a decision that opinionated.
+
+## Related
+
+- The comparison itself:
+  [`src/compare.ts`](https://github.com/nkwib/tapedeck/blob/main/src/compare.ts)
+- The compare path in
+  [`src/middleware.ts`](https://github.com/nkwib/tapedeck/blob/main/src/middleware.ts)
+- [Drift detection in the guide](/docs#compare) and
+  [`CassetteCompareResult`](/api#CassetteCompareResult)
+- [A miss throws in CI](/decisions/miss-throws-in-ci), the same refusal to
+  paper over a stale fixture

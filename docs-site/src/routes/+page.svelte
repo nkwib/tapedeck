@@ -53,8 +53,9 @@
   &rbrace;),
 &rbrace;);
 
-<span class="cmt">// CASSETTE_MODE=record → hits live API, writes a cassette</span>
-<span class="cmt">// CASSETTE_MODE=replay → offline, deterministic, free</span>
+<span class="cmt">// CASSETTE_MODE=record  → hits live API, writes a cassette</span>
+<span class="cmt">// CASSETTE_MODE=replay  → offline, deterministic, free</span>
+<span class="cmt">// CASSETTE_MODE=compare → live call, drift report, no write</span>
 <span class="kw">const</span> &lbrace; text &rbrace; = <span class="kw">await</span> <span class="fn">generateText</span>(&lbrace; model, prompt &rbrace;);</code></pre>
     </aside>
   </div>
@@ -74,7 +75,8 @@
       <p>
         <code>cassetteMiddleware</code> plugs into <code>wrapLanguageModel</code>. It normalizes
         at the SDK abstraction, so it's provider-agnostic — swap OpenAI for Anthropic and the
-        cassette still replays.
+        cassette still replays. The same object types against <code>ai@6</code> (spec v3) and
+        <code>ai@7</code> (spec v4) with no cast.
       </p>
     </div>
 
@@ -104,6 +106,11 @@
         Cassettes are keyed by a stable hash of the request. In <code>replay</code> a miss
         <strong>throws</strong> — a changed prompt or tool schema fails the test loudly instead
         of replaying stale data.
+      </p>
+      <p>
+        <code>compare</code> covers the other direction: run it on a schedule and it calls the
+        live model, reports how the tool-call trajectory drifted from the committed cassette,
+        and never rewrites it.
       </p>
     </div>
 
@@ -188,7 +195,8 @@
     <p>
       Read <code>mode</code> from an env var, record your suite once against the live API, and
       commit the cassettes. Flip <code>CASSETTE_MODE=replay</code> in CI — deterministic, offline,
-      and free from then on.
+      and free from then on. Schedule <code>npx tapedeck compare pnpm test</code> when you want
+      to know the model has moved.
     </p>
     <div class="cta">
       <a class="btn primary" href="/docs#quickstart">Quickstart</a>
@@ -419,6 +427,7 @@
 
   .feature h3 { font-size: var(--fs-md); margin: 0 0 var(--sp-2); letter-spacing: -0.02em; }
   .feature p { color: var(--c-text-muted); margin: 0; font-size: var(--fs-sm); line-height: 1.65; }
+  .feature p + p { margin-top: var(--sp-3); }
 
   .ports {
     padding: var(--sp-8) var(--sp-5);

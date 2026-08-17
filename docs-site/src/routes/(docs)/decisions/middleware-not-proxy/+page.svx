@@ -7,7 +7,7 @@
 
 ## What we did
 
-tapedeck is an AI SDK `LanguageModelV3Middleware`. You install it with
+tapedeck is an AI SDK language-model middleware. You install it with
 the SDK's own `wrapLanguageModel`, and it intercepts `doGenerate` and
 `doStream` — the two methods every provider model implements.
 
@@ -96,7 +96,7 @@ testing an agent.)
 - **Zero infra.** No sidecar, no port, no CA cert to trust. The
   middleware is a function; the cassette is a JSON file you commit.
 - **One integration point.** Behaviour switches on `mode`
-  (`record` | `replay` | `live`) with no other code changes — see
+  (`record`, `replay`, `compare`, `live`) with no other code changes. See
   [a miss throws in CI](/decisions/miss-throws-in-ci) for why `replay`
   is strict.
 - **The cost is scope.** tapedeck only works with the Vercel AI SDK.

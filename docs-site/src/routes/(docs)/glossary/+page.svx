@@ -28,8 +28,10 @@ the whole set with one `instanceof CassetteError`. Members:
 `CassetteMissError` (replay found no matching cassette),
 `CassetteSecretError` (a replayed cassette still contains a value a
 redaction matcher would strip), `CassetteCorruptError` (invalid JSON,
-unknown version, or malformed response shape), and `CassetteModeError`
-(an invalid mode string). See [Decisions](/decisions).
+unknown version, or malformed response shape), `CassetteModeError`
+(an invalid mode string), and `CassetteDriftError` ([compare](#compare-mode)
+found [drift](#drift) and no `onCompare` handler owned it).
+See [Decisions](/decisions).
 
 <h3 id="chunk-stream-part">chunk / stream part</h3>
 
@@ -37,6 +39,26 @@ One ordered element of a recorded stream — a `text-delta`, a
 `tool-call`, and friends. In `record` mode tapedeck drains the live
 stream and captures these parts in order; in `replay` mode it re-serves
 the same array through [`simulateReadableStream`](#simulatereadablestream).
+
+<h3 id="compare-mode">compare mode</h3>
+
+Calls the real model *and* loads the recorded cassette, reports how the
+two diverged, and returns the live result. It never writes: the cassette
+is left byte-identical, which is what separates it from `record`. A
+[miss](#miss) still throws, and unhandled [drift](#drift) throws
+`CassetteDriftError`, so `npx tapedeck compare pnpm test` is a CI gate.
+Because it calls the provider it costs tokens: run it on a schedule, not
+on every push.
+
+<h3 id="drift">drift</h3>
+
+The gap that opens between a committed cassette and what the model does
+today, when the provider retunes the model underneath a fixture nobody
+changed. [compare mode](#compare-mode) measures it on three signals: the
+[tool-call trajectory](#tool-call-trajectory), the unified finish reason,
+and text (`exact`, `normalized`, or `different`). `result.equal` is true
+when the trajectory and finish reason match and the text is no worse than
+`normalized`. See [Decisions](/decisions/compare-never-writes).
 
 <h3 id="hash">hash</h3>
 
@@ -107,6 +129,27 @@ recorded [chunk](#chunk-stream-part) array back into a real
 `streamText`, UI message streams, and tool-call streaming all see the
 same surface they would live.
 
+<h3 id="spec-version">spec version</h3>
+
+The version of the AI SDK's language-model middleware surface. `ai@6`
+takes spec v3 and `ai@7` takes spec v4; the two concrete types are
+mutually unassignable. tapedeck types its boundary structurally
+(`TapedeckMiddleware`), declaring only the fields it reads and staying
+generic in the result type, so one middleware object is assignable to
+both with no cast. `specificationVersion` stays `'v3'` because v4 hosts
+accept any string while v3 hosts accept only `'v3'`. See
+[Compatibility](/compatibility).
+
 ### stream part
 
 See [chunk / stream part](#chunk-stream-part).
+
+<h3 id="tool-call-trajectory">tool-call trajectory</h3>
+
+The ordered sequence of tool calls a response makes: tool names, in
+order, with their inputs. It is the behavioural contract of an agent, so
+[compare mode](#compare-mode) treats a changed trajectory as
+[drift](#drift) while tolerating text that differs only in whitespace or
+case. Inputs are compared as canonical JSON, so a reordered key is never
+drift. The `toFollowRoute()` matcher asserts the same trajectory against
+a [toolroute](https://github.com/nkwib/toolroute) router.
