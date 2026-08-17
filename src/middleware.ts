@@ -1,10 +1,12 @@
 // tapedeck — record/replay middleware for the Vercel AI SDK
 //
-// Wraps a LanguageModel (AI SDK v6 / spec v3) so that model calls can be recorded
-// to a cassette and replayed offline. Three modes:
-//   • record  — call the real model, persist request+response, return it
-//   • replay  — look up a cassette by hash (or name), serve it, throw on miss
-//   • live    — passthrough; do nothing
+// Wraps a LanguageModel so that model calls can be recorded to a cassette and
+// replayed offline. Four modes:
+//   * record:   call the real model, persist request+response, return it
+//   * replay:   look up a cassette by hash (or name), serve it, throw on miss
+//   * compare:  call the real model *and* load the cassette, report the drift,
+//               return the live result; the cassette is never written
+//   * live:     passthrough; do nothing
 //
 // Both `doGenerate` (one-shot) and `doStream` (streaming) are intercepted.
 //
@@ -13,14 +15,10 @@
 // multi-interaction files: every call the test makes is stored in the same
 // file, keyed by request hash, so a multi-step agent records and replays each
 // call distinctly.
+//
+// The middleware is typed structurally (see `spec.ts`) so one object satisfies
+// `wrapLanguageModel` under both `ai@6` (spec v3) and `ai@7` (spec v4).
 
-import type {
-  LanguageModelV3,
-  LanguageModelV3CallOptions,
-  LanguageModelV3GenerateResult,
-  LanguageModelV3Middleware,
-  LanguageModelV3StreamResult,
-} from '@ai-sdk/provider';
 import {
   CASSETTE_VERSION,
   MULTI_CASSETTE_VERSION,
@@ -29,27 +27,63 @@ import {
   type CassetteInteraction,
   type CassetteRequest,
   type CassetteResponse,
+  type CassetteResponseMetadata,
+  type GenerateCassetteResponse,
   type MultiCassette,
+  type StreamCassetteResponse,
   cassettePathForHash,
   cassettePathForName,
   isMultiCassette,
   parseCassette,
   serializeCassette,
 } from './cassette.js';
+import {
+  type CassetteCompareResult,
+  type CompareContext,
+  compareCassetteResponses,
+} from './compare.js';
 import { getActiveCassetteContext } from './context.js';
 import {
   CassetteCorruptError,
+  CassetteDriftError,
   CassetteMissError,
   CassetteModeError,
   CassetteSecretError,
 } from './errors.js';
 import { computeCassetteHash, requestKeyFromCall } from './hash.js';
 import { DEFAULT_REDACT, findUnredacted, redact, type RedactMatcher } from './redact.js';
+import type {
+  SpecCallOptions,
+  SpecModel,
+  TapedeckMiddleware,
+  WrapGenerateOptions,
+  WrapStreamOptions,
+} from './spec.js';
 import { type CassetteStore, fileCassetteStore } from './store.js';
 import { collectStreamChunks, replayStreamResult } from './stream-replay.js';
 import { type TapedeckSpan, type TapedeckTracer, withSpan } from './telemetry.js';
 
-export type CassetteMode = 'record' | 'replay' | 'live';
+export type CassetteMode = 'record' | 'replay' | 'live' | 'compare';
+
+/**
+ * The live `doGenerate` result, restricted to the fields tapedeck records.
+ * Spec v3 and v4 agree on every one of them, which is why one view serves both.
+ */
+interface LiveGenerateResult {
+  content: GenerateCassetteResponse['content'];
+  finishReason: GenerateCassetteResponse['finishReason'];
+  usage: GenerateCassetteResponse['usage'];
+  providerMetadata?: GenerateCassetteResponse['providerMetadata'];
+  warnings?: GenerateCassetteResponse['warnings'];
+  response?: CassetteResponseMetadata;
+}
+
+/** The live `doStream` result, restricted to the fields tapedeck touches. */
+interface LiveStreamResult {
+  stream: ReadableStream<StreamCassetteResponse['chunks'][number]>;
+  request?: unknown;
+  response?: unknown;
+}
 
 export interface CassetteMiddlewareOptions {
   /** Operating mode. Defaults to `'live'` (passthrough). */
@@ -82,9 +116,19 @@ export interface CassetteMiddlewareOptions {
    * Misses record the exception and an error status. Omit for zero overhead.
    */
   tracer?: TapedeckTracer;
+  /**
+   * Called once per call in `compare` mode with the structured drift report,
+   * whether or not anything diverged.
+   *
+   * Registering a handler hands you the failure policy (collect the reports,
+   * fail the suite at the end, annotate a PR). With no handler, the first
+   * diverging call throws {@link CassetteDriftError}, so drift can never pass
+   * silently.
+   */
+  onCompare?: (result: CassetteCompareResult) => void | Promise<void>;
 }
 
-const VALID_MODES: ReadonlySet<string> = new Set(['record', 'replay', 'live']);
+const VALID_MODES: ReadonlySet<string> = new Set(['record', 'replay', 'live', 'compare']);
 
 function assertMode(mode: string): asserts mode is CassetteMode {
   if (!VALID_MODES.has(mode)) throw new CassetteModeError(mode);
@@ -98,6 +142,7 @@ interface Resolved {
   matchers: RedactMatcher[];
   store: CassetteStore;
   tracer: TapedeckTracer | undefined;
+  onCompare: CassetteMiddlewareOptions['onCompare'];
   /** Active recording session (one per `withCassette` run), if any. */
   recordSession: { written: boolean } | undefined;
 }
@@ -113,6 +158,7 @@ function resolveConfig(options: CassetteMiddlewareOptions, defaultStore: Cassett
     matchers: [...DEFAULT_REDACT, ...(options.redact ?? [])],
     store: options.store ?? defaultStore,
     tracer: options.tracer,
+    onCompare: options.onCompare,
     recordSession: ctx?.recordSession,
   };
 }
@@ -124,13 +170,18 @@ function cassettePath(resolved: Resolved, hash: string): string {
     : cassettePathForHash(resolved.cassetteDir, hash);
 }
 
-/** Build the persisted (redacted) request block. */
-function buildRequest(params: LanguageModelV3CallOptions, model: LanguageModelV3): CassetteRequest {
+/**
+ * Build the persisted (redacted) request block. `prompt` and `tools` are typed
+ * opaquely at the middleware boundary (spec v3 and v4 disagree on their part
+ * shapes) but are stored verbatim, so the cast is a naming exercise, not a
+ * conversion.
+ */
+function buildRequest(params: SpecCallOptions, model: SpecModel): CassetteRequest {
   return {
     modelProvider: model.provider,
     modelId: model.modelId,
-    prompt: params.prompt,
-    tools: params.tools,
+    prompt: params.prompt as CassetteRequest['prompt'],
+    tools: params.tools as CassetteRequest['tools'],
     maxOutputTokens: params.maxOutputTokens,
     temperature: params.temperature,
     topP: params.topP,
@@ -164,11 +215,12 @@ async function readThroughStore(store: CassetteStore, path: string): Promise<Cas
 }
 
 /**
- * Resolve the recorded response for `hash` in replay mode, or throw the right
- * error. Multi-interaction cassettes match by hash; legacy single-interaction
- * named cassettes serve their one response as-is (pre-0.3.0 behaviour).
+ * Resolve the recorded response for `hash`, or throw the right error. Used by
+ * both `replay` and `compare`. Multi-interaction cassettes match by hash;
+ * legacy single-interaction named cassettes serve their one response as-is
+ * (pre-0.3.0 behaviour).
  */
-async function loadForReplay(
+async function loadRecordedResponse(
   cfg: Resolved,
   hash: string,
   path: string,
@@ -206,6 +258,26 @@ function assertResponseType<T extends CassetteResponse['type']>(
       reason: `expected a '${expected}' cassette but found '${response.type}'`,
     });
   }
+}
+
+/**
+ * Compare a live response against the recorded one and surface the report.
+ * Never writes: `compare` leaves the cassette exactly as it found it.
+ */
+async function reportComparison(
+  cfg: Resolved,
+  recorded: CassetteResponse,
+  live: CassetteResponse,
+  context: CompareContext,
+  span: TapedeckSpan | undefined,
+): Promise<void> {
+  const result = compareCassetteResponses(recorded, live, context);
+  span?.setAttribute('tapedeck.compare_equal', result.equal);
+  if (cfg.onCompare) {
+    await cfg.onCompare(result);
+    return;
+  }
+  if (!result.equal) throw new CassetteDriftError(result);
 }
 
 /**
@@ -266,7 +338,7 @@ async function persistInteraction(
  */
 export function cassetteMiddleware(
   options: CassetteMiddlewareOptions = {},
-): LanguageModelV3Middleware {
+): TapedeckMiddleware {
   // Fail fast on a bad static mode even if no call is ever made.
   if (options.mode !== undefined) assertMode(String(options.mode));
   // One default store per middleware instance, created only if needed.
@@ -275,22 +347,28 @@ export function cassetteMiddleware(
   return {
     specificationVersion: 'v3',
 
-    async wrapGenerate({ doGenerate, params, model }) {
+    async wrapGenerate<GENERATE>({
+      doGenerate,
+      params,
+      model,
+    }: WrapGenerateOptions<GENERATE>): Promise<GENERATE> {
       const cfg = resolveConfig(options, defaultStore);
       if (cfg.mode === 'live') return doGenerate();
 
-      const key = requestKeyFromCall(params, model);
-      const hash = await computeCassetteHash(key);
+      const hash = await computeCassetteHash(requestKeyFromCall(params, model));
       const path = cassettePath(cfg, hash);
 
       return withSpan(
         cfg.tracer,
         'tapedeck.generate',
         spanAttributes(cfg, model, hash, path),
-        async (span): Promise<LanguageModelV3GenerateResult> => {
+        async (span) => {
           if (cfg.mode === 'replay') {
-            const response = await loadForReplay(cfg, hash, path, span);
+            const response = await loadRecordedResponse(cfg, hash, path, span);
             assertResponseType(response, 'generate', path);
+            // The host's spec version names the concrete result type; the
+            // cassette holds exactly those fields, serialized. This cast is the
+            // one place the spec-agnostic boundary is paid for.
             return {
               content: response.content,
               finishReason: response.finishReason,
@@ -298,58 +376,73 @@ export function cassetteMiddleware(
               providerMetadata: response.providerMetadata,
               warnings: response.warnings ?? [],
               response: response.metadata,
-            };
+            } as unknown as GENERATE;
           }
 
-          // record
-          const result = await doGenerate();
+          // record and compare both need the live call.
+          const live = await doGenerate();
+          const response = generateResponse(live as LiveGenerateResult);
+
+          if (cfg.mode === 'compare') {
+            const recorded = await loadRecordedResponse(cfg, hash, path, span);
+            await reportComparison(cfg, recorded, response, context(model, hash, path), span);
+            return live;
+          }
+
           await persistInteraction(
             cfg,
             hash,
             redact(buildRequest(params, model), cfg.matchers),
-            redact(
-              {
-                type: 'generate' as const,
-                content: result.content,
-                finishReason: result.finishReason,
-                usage: result.usage,
-                providerMetadata: result.providerMetadata,
-                warnings: result.warnings ?? [],
-                metadata: result.response,
-              },
-              cfg.matchers,
-            ),
+            redact(response, cfg.matchers),
             path,
           );
-          return result;
+          return live;
         },
       );
     },
 
-    async wrapStream({ doStream, params, model }) {
+    async wrapStream<STREAM>({
+      doStream,
+      params,
+      model,
+    }: WrapStreamOptions<STREAM>): Promise<STREAM> {
       const cfg = resolveConfig(options, defaultStore);
       if (cfg.mode === 'live') return doStream();
 
-      const key = requestKeyFromCall(params, model);
-      const hash = await computeCassetteHash(key);
+      const hash = await computeCassetteHash(requestKeyFromCall(params, model));
       const path = cassettePath(cfg, hash);
 
       return withSpan(
         cfg.tracer,
         'tapedeck.stream',
         spanAttributes(cfg, model, hash, path),
-        async (span): Promise<LanguageModelV3StreamResult> => {
+        async (span) => {
           if (cfg.mode === 'replay') {
-            const response = await loadForReplay(cfg, hash, path, span);
+            const response = await loadRecordedResponse(cfg, hash, path, span);
             assertResponseType(response, 'stream', path);
             span?.setAttribute('tapedeck.chunk_count', response.chunks.length);
-            return replayStreamResult(response.chunks);
+            return replayStreamResult(response.chunks) as unknown as STREAM;
           }
 
-          // record: drain the live stream, persist it, then re-serve from the buffer
-          // so the caller still receives the response it would have gotten live.
-          const result = await doStream();
-          const chunks = await collectStreamChunks(result.stream);
+          // record and compare: drain the live stream so it can be inspected,
+          // then re-serve it from the buffer so the caller still gets its
+          // response.
+          const live = (await doStream()) as LiveStreamResult;
+          const chunks = await collectStreamChunks(live.stream);
+          span?.setAttribute('tapedeck.chunk_count', chunks.length);
+
+          if (cfg.mode === 'compare') {
+            const recorded = await loadRecordedResponse(cfg, hash, path, span);
+            await reportComparison(
+              cfg,
+              recorded,
+              { type: 'stream', chunks },
+              context(model, hash, path),
+              span,
+            );
+            return reserve(live, chunks) as unknown as STREAM;
+          }
+
           const response = redact({ type: 'stream' as const, chunks }, cfg.matchers);
           await persistInteraction(
             cfg,
@@ -358,23 +451,49 @@ export function cassetteMiddleware(
             response,
             path,
           );
-          span?.setAttribute('tapedeck.chunk_count', chunks.length);
-          // Replay the (redacted) recorded chunks so record and replay stay identical.
-          return {
-            ...replayStreamResult(response.chunks),
-            request: result.request,
-            response: result.response,
-          };
+          // Re-serve the (redacted) recorded chunks so record and replay stay identical.
+          return reserve(live, response.chunks) as unknown as STREAM;
         },
       );
     },
   };
 }
 
+/** The cassette response a live generate result would have been recorded as. */
+function generateResponse(live: LiveGenerateResult): GenerateCassetteResponse {
+  return {
+    type: 'generate',
+    content: live.content,
+    finishReason: live.finishReason,
+    usage: live.usage,
+    providerMetadata: live.providerMetadata,
+    warnings: live.warnings ?? [],
+    metadata: live.response,
+  };
+}
+
+/** Re-serve drained chunks as a fresh stream result, keeping the live metadata. */
+function reserve(
+  live: LiveStreamResult,
+  chunks: StreamCassetteResponse['chunks'],
+): LiveStreamResult {
+  return { ...replayStreamResult(chunks), request: live.request, response: live.response };
+}
+
+/** Identity of the call, as carried into a compare report. */
+function context(model: SpecModel, hash: string, path: string): CompareContext {
+  return {
+    hash: `sha256:${hash}`,
+    cassettePath: path,
+    modelProvider: model.provider,
+    modelId: model.modelId,
+  };
+}
+
 /** The attribute set every tapedeck span starts with. */
 function spanAttributes(
   cfg: Resolved,
-  model: { provider: string; modelId: string },
+  model: SpecModel,
   hash: string,
   path: string,
 ): Record<string, string> {

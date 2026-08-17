@@ -47,7 +47,7 @@ jobs:
               `Weekly compatibility run failed against \`ai@${sdk}\`.`,
               ``,
               `- Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              `- Suspected cause: language-model spec v3 shape change (stream parts, generate result, or tool schema).`,
+              `- Suspected cause: a language-model spec shape change (stream parts, generate result, tool schema, or the middleware surface the *.test-d.ts assertions pin).`,
               ``,
               `When the cause is identified, update \`COMPATIBILITY.md\` with a `,
               `\`❌ fail\` row pointing at this issue and either pin the peer `,

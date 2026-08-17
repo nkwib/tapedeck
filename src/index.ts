@@ -3,13 +3,38 @@
 export { cassetteMiddleware } from './middleware.js';
 export type { CassetteMiddlewareOptions, CassetteMode } from './middleware.js';
 
+export type {
+  SpecCallOptions,
+  SpecModel,
+  TapedeckMiddleware,
+  WrapGenerateOptions,
+  WrapStreamOptions,
+} from './spec.js';
+
 export {
   CassetteError,
   CassetteMissError,
   CassetteSecretError,
   CassetteCorruptError,
   CassetteModeError,
+  CassetteDriftError,
 } from './errors.js';
+
+export {
+  compareCassetteResponses,
+  formatCompareResult,
+  summarizeResponse,
+} from './compare.js';
+export type {
+  CassetteCompareResult,
+  CompareContext,
+  CompareFinishReason,
+  CompareTextResult,
+  CompareToolCalls,
+  ResponseSummary,
+  TextDivergence,
+  ToolCallSummary,
+} from './compare.js';
 
 export { computeCassetteHash, stableStringify, normalizeTools } from './hash.js';
 export type { CassetteRequestKey } from './hash.js';

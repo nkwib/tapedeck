@@ -31,20 +31,22 @@ const usage = {
 };
 
 let live = true; // flipped off for the replay phase
+let prefix = 'echo'; // changed to force drift in the compare phase
+const reports = [];
 const model = wrapLanguageModel({
   model: new MockLanguageModelV3({
     doGenerate: async (options) => {
       if (!live) fail('live model called during replay');
       const part = options.prompt[0]?.content[0];
       return {
-        content: [{ type: 'text', text: `echo:${part && 'text' in part ? part.text : '?'}` }],
+        content: [{ type: 'text', text: `${prefix}:${part && 'text' in part ? part.text : '?'}` }],
         finishReason: { unified: 'stop', raw: 'stop' },
         usage,
         warnings: [],
       };
     },
   }),
-  middleware: cassetteMiddleware({ cassetteDir: dir }),
+  middleware: cassetteMiddleware({ cassetteDir: dir, onCompare: (r) => reports.push(r) }),
 });
 const ask = async (text) => {
   const r = await model.doGenerate({
@@ -75,5 +77,15 @@ await withCassette('flow.json', async () => {
   }
 });
 
+// compare: a drifting live model is reported and the cassette is left alone
+live = true;
+prefix = 'drift';
+const before = await readFile(join(dir, 'flow.json'), 'utf8');
+await withCassette('flow.json', async () => { await ask('one'); }, { mode: 'compare' });
+if (reports.length !== 1) fail(`expected 1 compare report, got ${reports.length}`);
+if (reports[0].equal) fail('compare did not flag drift');
+if (reports[0].text.status !== 'different') fail(`unexpected text status ${reports[0].text.status}`);
+if ((await readFile(join(dir, 'flow.json'), 'utf8')) !== before) fail('compare rewrote the cassette');
+
 await rm(dir, { recursive: true, force: true });
-console.log('smoke: PASS — cross-bundle withCassette record/replay (multi-interaction)');
+console.log('smoke: PASS - cross-bundle withCassette record/replay/compare (multi-interaction)');
