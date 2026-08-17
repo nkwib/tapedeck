@@ -1,9 +1,27 @@
 # Compatibility
 
-tapedeck operates at the Vercel AI SDK's `wrapLanguageModel` middleware layer
-(language-model spec **v3**). The structural ceiling on the project's lifetime
-is that spec's request/response shape — so this file is the public, dated record
-of what tapedeck is tested against.
+tapedeck operates at the Vercel AI SDK's `wrapLanguageModel` middleware layer.
+The structural ceiling on the project's lifetime is that layer's
+request/response shape, so this file is the public, dated record of what
+tapedeck is tested against.
+
+## Language-model spec versions
+
+**Both spec versions are typed as of 0.4.0**, not just supported at runtime.
+`ai@6` takes a spec v3 middleware and `ai@7` takes spec v4; the two concrete
+types are mutually unassignable, so before 0.4.0 an `ai@7` consumer had to
+write `as unknown as LanguageModelMiddleware` at the call site.
+`cassetteMiddleware` now returns a structurally typed `TapedeckMiddleware`:
+it declares only the fields tapedeck reads (`prompt`, `tools`, sampling params,
+`provider`, `modelId`) and stays generic in the result type, so one object is
+assignable to both. `specificationVersion` stays `'v3'` because v4 hosts accept
+any string while v3 hosts accept only `'v3'`.
+
+Both provider majors are dev dependencies (`@ai-sdk/provider` for v3,
+`@ai-sdk/provider-v4` for v4), and `test/types.test-d.ts` asserts assignability
+to both spec surfaces plus to `wrapLanguageModel` from whichever `ai` major the
+CI matrix leg installed. A spec v5 would show up as a red type test, not as a
+silent consumer-side cast.
 
 ## Tested versions
 
@@ -14,6 +32,8 @@ of what tapedeck is tested against.
 | 6.0.0      | 2026-06-10  | 0.1.0    | ✅ pass | Launch row. Model spec v3: `doGenerate` returns `content[]`; `doStream` yields `text-delta` / `tool-call` parts. |
 | 7.0.37 | 2026-07-27 | 0.3.0 | ✅ pass | Weekly cron. |
 | 7.0.58 | 2026-08-03 | 0.3.0 | ✅ pass | Weekly cron; peer range widened to `<8` in 0.3.1. |
+| 6.0.256 | 2026-08-11 | 0.4.0 | ✅ pass | Spec v3 typed via `TapedeckMiddleware`; type tests green. |
+| 7.0.58 | 2026-08-11 | 0.4.0 | ✅ pass | Spec v4 typed via `TapedeckMiddleware`; the `as unknown as` cast at `wrapLanguageModel` is gone. |
 
 ## Pinned peer range
 
@@ -23,8 +43,9 @@ of what tapedeck is tested against.
 
 A new SDK major joins the peer range only after the weekly cron proves it
 green (`ai@7` passed at 7.0.37 and 7.0.58, so 0.3.1 widened the pin to `<8`).
-What forces a tapedeck major is a language-model *spec* shape change, not an
-SDK major that keeps spec v3 intact. The cassette `version` field
+What forces a tapedeck major is a language-model *spec* shape change deep
+enough to break the fields tapedeck reads, not an SDK major that renumbers the
+spec. The cassette `version` field
 (`tapedeck@<pkg>`) and the recorded `modelProvider` / `modelId` make a format
 boundary loud at replay time.
 
@@ -49,14 +70,15 @@ record→replay round trip against `memoryCassetteStore` with no filesystem).
 A deployed-Worker smoke test is still TODO — treat Workers support as
 *designed-for, not yet CI-verified*.
 
-The CLI (`tapedeck record|replay|ls|diff|merge`) is Node-only by design.
+The CLI (`tapedeck record|replay|compare|ls|diff|merge`) is Node-only by design.
 
 ## What "pass" means
 
 A row is `✅ pass` when:
 
 1. `pnpm typecheck` succeeds against the SDK version.
-2. `pnpm test` is green (the suite uses `MockLanguageModelV3` — no live API calls).
+2. `pnpm test` is green (the suite uses `MockLanguageModelV3`, no live API
+   calls), including the `*.test-d.ts` type assertions.
 3. A round-trip holds: a cassette recorded under `record` replays byte-identical
    stream parts under `replay`, and a changed prompt/tool schema misses.
 

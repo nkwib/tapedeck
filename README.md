@@ -8,7 +8,7 @@
 npm install -D @nkwib/tapedeck
 ```
 
-> Requires `ai` v6 or v7 (`>=6.0.0 <8`). tapedeck operates at the `wrapLanguageModel` middleware layer (model spec **v3**), so it's provider-agnostic and stream-aware by construction — no HTTP proxy, no infra.
+> Requires `ai` v6 or v7 (`>=6.0.0 <8`). tapedeck operates at the `wrapLanguageModel` middleware layer, so it's provider-agnostic and stream-aware by construction: no HTTP proxy, no infra. Both language-model specs are **typed**: the same middleware drops into `wrapLanguageModel` under `ai@6` (spec v3) and `ai@7` (spec v4) with no cast.
 
 ---
 
@@ -57,9 +57,64 @@ tapedeck normalizes at the SDK's own abstraction, so a cassette survives provide
 |------|-----------|
 | `record` | Calls the real model, serializes request + response to a cassette, returns the live result. |
 | `replay` | Looks up the cassette by hash, serves it. **A miss throws** — a changed prompt or tool schema fails the test, forcing a re-record. |
+| `compare` | Calls the real model *and* loads the cassette, reports how they diverged, returns the live result. Never writes. |
 | `live` | Passthrough. No recording, no lookup. |
 
-The recommended setup: `live` in development, `record` to capture a fixture once, `replay` in CI.
+The recommended setup: `live` in development, `record` to capture a fixture once, `replay` in CI, `compare` on a schedule to catch drift.
+
+---
+
+## Drift detection (`mode: 'compare'`)
+
+Cassettes are static fixtures, and a static fixture rots silently: the provider
+retunes the model and the recorded trajectory quietly stops being what the model
+does. `compare` is the check for that. It calls the live model, loads the
+recorded cassette, and reports how the two diverged, **without rewriting the
+cassette**.
+
+```typescript
+cassetteMiddleware({
+  mode: 'compare',
+  cassetteDir: './cassettes',
+  onCompare(result) {
+    if (!result.equal) reports.push(result); // fail the suite at the end
+  },
+});
+```
+
+Three signals, all explainable:
+
+| Signal | What counts as drift |
+|--------|----------------------|
+| Tool-call trajectory | Same tool names, in the same order, with the same inputs. Inputs are compared as canonical JSON, so key order is never drift. |
+| Finish reason | The unified label (`stop`, `tool-calls`, …). A changed provider-raw reason is not drift. |
+| Text | `exact` (byte-identical), `normalized` (identical after trimming, collapsing whitespace, lowercasing), or `different`. |
+
+`result.equal` is true when the trajectory and finish reason match and the text
+is no worse than `normalized`: model prose is not a contract, the trajectory
+is. `result.text.status` is always in the report, so a stricter policy is one
+`onCompare` handler away. There is no similarity score to argue with.
+
+**It never passes silently.** `onCompare` fires on every compared call, drift or
+not. With no handler registered, the first diverging call throws
+`CassetteDriftError` with the rendered report, which is the CI path:
+
+```bash
+npx tapedeck compare pnpm test   # runs with CASSETTE_MODE=compare, exits nonzero on drift
+```
+
+A cassette miss in `compare` mode is a miss, not a pass: it throws
+`CassetteMissError` exactly as `replay` does.
+
+```
+tapedeck: live response drifted from the cassette.
+  sha256:9f2c… (stream, openai/gpt-4o)
+  cassette: ./cassettes/checkout-flow.json
+  tool calls: call 2: tool 'checkout' != 'refund'
+    cassette: search({"q":"shirt"}) -> checkout({"id":1})
+    live:     search({"q":"shirt"}) -> refund({"id":1})
+  finish reason: stop -> tool-calls
+```
 
 ---
 
@@ -166,6 +221,7 @@ The package ships a small CLI for the record/replay workflow:
 ```bash
 npx tapedeck record ./scripts/checkout-demo.mjs   # run with CASSETTE_MODE=record
 npx tapedeck replay ./scripts/checkout-demo.mjs   # run with CASSETTE_MODE=replay
+npx tapedeck compare pnpm test                    # run with CASSETTE_MODE=compare (drift gate)
 npx tapedeck record pnpm test                     # non-file args run as commands on PATH
 
 npx tapedeck ls ./cassettes                       # kind, model, recordedAt per cassette
@@ -254,6 +310,7 @@ cassetteMiddleware({
 | `CassetteSecretError` | A replayed cassette still contains unredacted secrets. Lists the offending field paths. |
 | `CassetteCorruptError` | Invalid JSON, unknown version, or a malformed response shape. |
 | `CassetteModeError` | An invalid mode string was supplied. |
+| `CassetteDriftError` | `compare` mode, the live response diverged and no `onCompare` handler took ownership. Carries the full `result` report. |
 
 All extend `CassetteError`, so you can catch the whole family with one `instanceof`.
 
@@ -263,16 +320,29 @@ All extend `CassetteError`, so you can catch the whole family with one `instance
 
 ### `cassetteMiddleware(options?)`
 
-Returns an AI SDK `LanguageModelV3Middleware`. Intercepts both `doGenerate` and `doStream`.
+Returns a `TapedeckMiddleware`, which satisfies `wrapLanguageModel` under both
+supported `ai` majors. Intercepts both `doGenerate` and `doStream`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `mode` | `'record' \| 'replay' \| 'live'` | `'live'` | Operating mode. |
+| `mode` | `'record' \| 'replay' \| 'compare' \| 'live'` | `'live'` | Operating mode. |
 | `cassetteDir` | `string` | `'./cassettes'` | Directory cassettes are read from / written to. |
 | `redact` | `(string \| RegExp)[]` | `[]` | Extra key matchers, merged with the built-in defaults. |
 | `cassetteName` | `string` | — | Force a specific filename instead of hash-addressing. Mostly used internally by `withCassette`. |
 | `store` | `CassetteStore` | filesystem | Storage backend (`read`/`write`/`list`). Use `memoryCassetteStore()` on edge runtimes. |
 | `tracer` | `TapedeckTracer` | — | OTel-compatible tracer; emits `tapedeck.generate` / `tapedeck.stream` spans. |
+| `onCompare` | `(result: CassetteCompareResult) => void \| Promise<void>` | none | `compare` mode only. Fires per call, drift or not. Registering it suppresses `CassetteDriftError` and hands you the failure policy. |
+
+### Spec v3 and v4 typing
+
+`ai@6` takes a spec v3 middleware; `ai@7` takes spec v4. The two are mutually
+unassignable, so a middleware annotated with either concrete type forces
+consumers of the other major to write `as unknown as LanguageModelMiddleware`.
+tapedeck instead types the middleware boundary structurally, over the fields it
+genuinely reads, and stays generic in the result type: whatever `doGenerate`
+hands in is what `wrapGenerate` hands back. Nothing about a request is
+interpreted, only hashed and serialized, so nothing is lost. `test/types.test-d.ts`
+asserts assignability to both spec surfaces on every CI run.
 
 ### `withCassette(name, testFn, options?)`
 
@@ -283,6 +353,8 @@ From `@nkwib/tapedeck/vitest`. Runs `testFn` with `name` pinned and `replay` for
 - `computeCassetteHash(request)` — the stable hash used for cassette identity (async, WebCrypto).
 - `loadCassette(hash, dir)` / `saveCassette(hash, dir, cassette)` — direct cassette I/O.
 - `parseCassette(raw, path)` / `serializeCassette(cassette)` — the on-disk codec (`CassetteFile = Cassette | MultiCassette`; narrow with `isMultiCassette`).
+- `compareCassetteResponses(recorded, live, context)` / `formatCompareResult(result)`: the drift report, usable outside the middleware.
+- `summarizeResponse(response)`: reduce a response to `{ text, toolCalls, finishReason }`.
 - `diffCassettes(a, b)` / `formatCassetteDiff(diff)` — semantic cassette diff.
 - `diffCassetteFiles(a, b)` / `formatCassetteFileDiff(diff)` — file diff pairing interactions by hash (any format).
 - `mergeCassetteDirs(src, dest, options?)` — merge cassette directories.
@@ -298,6 +370,7 @@ From `@nkwib/tapedeck/vitest`. Runs `testFn` with `name` pinned and `replay` for
 2. Run your agent test once with `CASSETTE_MODE=record` against the live API.
 3. Commit the generated `cassettes/*.cassette.json`.
 4. Set `CASSETTE_MODE=replay` in CI. Tests are now offline, deterministic, and free.
+5. Optionally run `npx tapedeck compare pnpm test` on a schedule (with real API keys) to catch the model drifting away from the committed fixtures.
 
 When a prompt or tool schema changes, the hash changes, replay misses, and CI fails — re-record and commit the new cassette.
 

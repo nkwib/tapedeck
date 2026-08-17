@@ -4,6 +4,55 @@ All notable changes to tapedeck are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 semantic versioning once it reaches 1.0.0.
 
+## 0.4.0 - 2026-08-11
+
+### Added
+
+- **`mode: 'compare'` (drift detection).** A fourth mode that calls the live
+  model *and* loads the recorded cassette, then reports how the two diverged.
+  A cassette is a static fixture, and a static fixture rots silently: the
+  provider retunes the model and the recorded trajectory quietly stops being
+  what the model does. `compare` is the check for that.
+  - Works for `doGenerate` and `doStream`, hash-addressed and named cassettes.
+  - Three signals, all explainable: the tool-call trajectory (same tool names,
+    same order, same inputs, compared as canonical JSON so key order is never
+    drift), the unified finish reason, and text (`exact` / `normalized` /
+    `different`, where normalized means identical after trimming, collapsing
+    whitespace, and lowercasing). No similarity score to argue with.
+  - Never writes. The cassette is left byte-identical, and the caller receives
+    the live result, so `compare` is a live run with a drift check stapled on.
+  - `onCompare(result)` fires once per compared call with the structured
+    `CassetteCompareResult`. With no handler, the first diverging call throws
+    the new `CassetteDriftError`, so drift can never pass silently; register a
+    handler to own the policy (collect every report, fail at the end).
+  - `tapedeck compare <script> [args...]` runs a command with
+    `CASSETTE_MODE=compare` and propagates its exit code: a CI drift gate.
+  - New exports: `compareCassetteResponses`, `summarizeResponse`,
+    `formatCompareResult`, `CassetteDriftError`, and the report types
+    (`CassetteCompareResult`, `ResponseSummary`, `ToolCallSummary`, ...).
+  - Compare spans carry a `tapedeck.compare_equal` attribute.
+
+### Changed
+
+- **Language-model spec v4 is now typed, not merely supported at runtime.**
+  `cassetteMiddleware` returned a `LanguageModelV3Middleware`, so `ai@7`
+  consumers (spec v4) had to write `as unknown as LanguageModelMiddleware` at
+  `wrapLanguageModel` even though the runtime path was green in the weekly
+  cron. The middleware is now typed structurally (`TapedeckMiddleware`): it
+  describes the fields tapedeck actually reads and stays generic in the result
+  type, so one object is assignable to `ai@6`'s spec v3 middleware and to
+  `ai@7`'s spec v4 middleware with no cast on either side. Same technique
+  already used for the OTel tracer and the toolroute router.
+  - `test/types.test-d.ts` asserts assignability to both spec surfaces (both
+    provider majors are dev dependencies) and to `wrapLanguageModel` from the
+    installed major. `pnpm test` now runs those assertions via
+    `vitest --typecheck`, in both legs of the CI matrix.
+  - `specificationVersion` stays `'v3'`: v4 hosts accept any string, v3 hosts
+    accept only `'v3'`.
+  - Runtime behaviour, cassette format, and hashes are untouched. No
+    `CASSETTE_VERSION` bump, because nothing about the on-disk format moved:
+    v1 and v2 cassettes replay byte-identically.
+
 ## 0.3.1 - 2026-08-10
 
 ### Changed
