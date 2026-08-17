@@ -7,6 +7,70 @@ All notable changes to tapedeck are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 semantic versioning once it reaches 1.0.0.
 
+## 0.4.0 - 2026-08-11
+
+### Added
+
+- **`mode: 'compare'` (drift detection).** A fourth mode that calls the
+  live model *and* loads the recorded cassette, then reports how the two
+  diverged. A cassette is a static fixture, and a static fixture rots
+  silently: the provider retunes the model and the recorded trajectory
+  quietly stops being what the model does. Works for `doGenerate` and
+  `doStream`, hash-addressed and named cassettes.
+  - Three signals, all explainable: the tool-call trajectory (same names,
+    same order, same inputs, compared as canonical JSON so key order is
+    never drift), the unified finish reason, and text
+    (`exact` / `normalized` / `different`). No similarity score to argue
+    with.
+  - **Never writes.** The cassette is left byte-identical and the caller
+    receives the live result, so `compare` is a live run with a drift
+    check stapled on. See
+    [compare never writes](/decisions/compare-never-writes).
+  - `onCompare(result)` fires once per compared call with the structured
+    `CassetteCompareResult`. With no handler, the first diverging call
+    throws the new `CassetteDriftError`, so drift can never pass
+    silently; register a handler to own the policy.
+  - `tapedeck compare <script> [args...]` runs a command with
+    `CASSETTE_MODE=compare` and propagates its exit code: a CI drift gate.
+  - New exports: `compareCassetteResponses`, `summarizeResponse`,
+    `formatCompareResult`, `CassetteDriftError`, and the report types
+    (`CassetteCompareResult`, `ResponseSummary`, `ToolCallSummary`, …).
+  - Compare spans carry a `tapedeck.compare_equal` attribute.
+
+### Changed
+
+- **Language-model spec v4 is now typed, not merely supported at
+  runtime.** `cassetteMiddleware` returned a `LanguageModelV3Middleware`,
+  so `ai@7` consumers (spec v4) had to write
+  `as unknown as LanguageModelMiddleware` at `wrapLanguageModel` even
+  though the runtime path was green in the weekly cron. The middleware is
+  now typed structurally
+  ([`TapedeckMiddleware`](/api#TapedeckMiddleware)): it describes the
+  fields tapedeck actually reads and stays generic in the result type, so
+  one object is assignable to `ai@6`'s spec v3 middleware and to `ai@7`'s
+  spec v4 middleware with no cast on either side.
+  - `test/types.test-d.ts` asserts assignability to both spec surfaces
+    and to `wrapLanguageModel` from the installed major, in both legs of
+    the CI matrix.
+  - `specificationVersion` stays `'v3'`: v4 hosts accept any string, v3
+    hosts accept only `'v3'`.
+  - Runtime behaviour, cassette format, and hashes are untouched. No
+    `CASSETTE_VERSION` bump: v1 and v2 cassettes replay byte-identically.
+
+## 0.3.1 - 2026-08-10
+
+### Changed
+
+- **`ai` peer range widened to `>=6.0.0 <8`.** `ai@7` keeps the
+  language-model middleware surface tapedeck wraps: the weekly compat
+  cron passed typecheck, the full suite, and the record/replay round trip
+  against 7.0.37 and 7.0.58, but the `<7` pin made the package
+  uninstallable next to a fresh `npm i ai`. No runtime changes; cassette
+  formats and hashes are untouched.
+- CI runs the suite against the latest of each supported `ai` major (6
+  and 7) on every push and PR, instead of only the lockfile's 6.x plus
+  the weekly `ai@latest` cron.
+
 ## 0.3.0 — 2026-06-10
 
 ### Added

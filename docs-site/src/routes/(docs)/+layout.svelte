@@ -11,7 +11,9 @@
         { href: '/docs#install', label: 'Install' },
         { href: '/docs#quickstart', label: 'Quickstart' },
         { href: '/docs#modes', label: 'Modes' },
+        { href: '/docs#compare', label: 'Drift detection' },
         { href: '/docs#middleware', label: 'cassetteMiddleware' },
+        { href: '/docs#spec-versions', label: 'Spec v3 and v4' },
         { href: '/docs#streaming', label: 'Streaming' },
         { href: '/docs#cassette-format', label: 'Cassette format' },
         { href: '/docs#hash', label: 'Hash algorithm' },
@@ -40,7 +42,8 @@
         { href: '/decisions/middleware-not-proxy', label: 'Middleware, not a proxy' },
         { href: '/decisions/miss-throws-in-ci', label: 'A miss throws in CI' },
         { href: '/decisions/redact-at-record-time', label: 'Redact at record time' },
-        { href: '/decisions/vercel-ai-sdk-coupling', label: 'Vercel AI SDK coupling' }
+        { href: '/decisions/vercel-ai-sdk-coupling', label: 'Vercel AI SDK coupling' },
+        { href: '/decisions/compare-never-writes', label: 'Compare never writes' }
       ]
     }
   ];
