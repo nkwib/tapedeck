@@ -34,6 +34,7 @@ silent consumer-side cast.
 | 7.0.58 | 2026-08-03 | 0.3.0 | ✅ pass | Weekly cron; peer range widened to `<8` in 0.3.1. |
 | 6.0.256 | 2026-08-11 | 0.4.0 | ✅ pass | Spec v3 typed via `TapedeckMiddleware`; type tests green. |
 | 7.0.58 | 2026-08-11 | 0.4.0 | ✅ pass | Spec v4 typed via `TapedeckMiddleware`; the `as unknown as` cast at `wrapLanguageModel` is gone. |
+| 7.0.85 | 2026-08-31 | 0.4.0 | ✅ pass | Weekly cron. |
 
 ## Pinned peer range
 
