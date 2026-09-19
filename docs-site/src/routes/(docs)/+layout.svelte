@@ -27,6 +27,10 @@
       ]
     },
     {
+      label: 'Recipes',
+      items: [{ href: '/recipes/ci-zero-api-calls', label: 'CI with zero API calls' }]
+    },
+    {
       label: 'Reference',
       items: [
         { href: '/api', label: 'API' },

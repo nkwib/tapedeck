@@ -1,0 +1,258 @@
+<script>
+  import Callout from '$lib/components/Callout.svelte';
+</script>
+
+# Test an agent in CI with zero API calls
+
+Record an agent's model calls once against the live API, commit the
+cassette, and replay it on every CI run after that: no API key in CI,
+no network calls, no per-run token cost, and a deterministic pass/fail
+instead of a flaky one.
+
+## Goal
+
+By the end of this recipe your CI job runs your agent's test suite with
+`CASSETTE_MODE=replay` and no provider credentials configured anywhere
+in the workflow, and a prompt or tool-schema change fails that job
+loudly instead of silently passing against a stale fixture.
+
+## Prerequisites
+
+- An agent built on the Vercel AI SDK (`generateText` / `streamText`)
+  behind `wrapLanguageModel`.
+- `@nkwib/tapedeck` installed as a dev dependency, with `ai` (`>=6.0.0
+  <8`) and `vitest` (`>=2.0.0`) as peers.
+- A model call you're willing to make once, live, to produce the initial
+  recording.
+
+```bash
+npm install -D @nkwib/tapedeck
+```
+
+## Steps
+
+### 1. Wrap the model
+
+Put `cassetteMiddleware` at the `wrapLanguageModel` layer, reading the
+mode from an environment variable so the same code runs live in
+development and replays in CI:
+
+```ts
+import { wrapLanguageModel } from 'ai';
+import { cassetteMiddleware } from '@nkwib/tapedeck';
+import type { CassetteMode } from '@nkwib/tapedeck';
+
+export function cassetteModel(model: Parameters<typeof wrapLanguageModel>[0]['model']) {
+  const mode = (process.env.CASSETTE_MODE as CassetteMode | undefined) ?? 'live';
+  return wrapLanguageModel({
+    model,
+    middleware: cassetteMiddleware({ mode, cassetteDir: './cassettes' }),
+  });
+}
+```
+
+As of tapedeck 0.4.0 `cassetteMiddleware` is typed structurally
+(`TapedeckMiddleware`), so this is assignable to `wrapLanguageModel`
+under both `ai@6` (spec v3) and `ai@7` (spec v4) with no cast on either
+side.
+
+### 2. Understand the three modes you'll actually use
+
+| Env var | Mode | What happens |
+|---|---|---|
+| unset / `live` | `live` | Passthrough, hits the real API. Use in development. |
+| `CASSETTE_MODE=record` | `record` | Calls the real model, writes `./cassettes/*.json`. Run this once, locally, with a real key. |
+| `CASSETTE_MODE=replay` | `replay` | Serves the committed cassette. No network. **This is what CI runs.** |
+
+`cassetteMiddleware` also has a fourth mode, `compare`, for scheduled
+drift checks against the live model rather than CI's hot path; see
+[Drift handling](#drift-handling) below.
+
+### 3. Pin the test to a named cassette with `withCassette`
+
+For a multi-step agent, use `withCassette` from
+`@nkwib/tapedeck/vitest` instead of relying on the ambient
+`CASSETTE_MODE`. It forces `replay` for the duration of the test body
+and records every model call the agent makes into one named,
+multi-interaction cassette file:
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { withCassette } from '@nkwib/tapedeck/vitest';
+import { runAgent } from '../src/agent.js';
+import { cassetteModel } from '../src/model.js';
+import { realModel } from '../src/real-model.js';
+
+describe('support agent', () => {
+  it('looks up the order and answers', async () => {
+    const model = cassetteModel(realModel());
+
+    const result = await withCassette('order-lookup.json', () =>
+      runAgent({ model, prompt: 'Where is my order A-1001?' }),
+    );
+
+    expect(result.text).toContain('A-1001');
+  });
+});
+```
+
+`withCassette(name, testFn, options?)` defaults `options.mode` to
+`'replay'`; pass `{ mode: 'record' }` in a one-off script to (re)record
+that same test body without touching the test file itself (see the
+record script below).
+
+### 4. Record the cassette once
+
+Write a small script that runs the exact same agent call as the test,
+under `withCassette(..., { mode: 'record' })`, against a real (or
+scripted) model:
+
+```ts
+// scripts/record.ts
+import { withCassette } from '@nkwib/tapedeck/vitest';
+import { runAgent } from '../src/agent.js';
+import { cassetteModel } from '../src/model.js';
+import { realModel } from '../src/real-model.js';
+
+await withCassette(
+  'order-lookup.json',
+  () => runAgent({ model: cassetteModel(realModel()), prompt: 'Where is my order A-1001?' }),
+  { mode: 'record' },
+);
+```
+
+```bash
+ANTHROPIC_API_KEY=sk-... npx tsx scripts/record.ts
+```
+
+This is the one and only live call. Everything after this step is
+offline.
+
+### 5. Commit the cassette
+
+```bash
+git add cassettes/order-lookup.json
+git commit -m "record order-lookup cassette"
+```
+
+Cassettes are pretty-printed JSON, so the diff in a re-record PR is the
+change review: a reviewer reads what the agent's tool calls or answer
+changed to, the same way they'd read any other diff.
+
+<Callout kind="warn" title="Check for secrets before committing">
+  Redaction runs at record time against the built-in matchers
+  (<code>apiKey</code>, <code>authorization</code>, <code>x-api-key</code>,
+  <code>bearer</code>, <code>token</code>) plus anything you pass via
+  <code>redact: (string | RegExp)[]</code>. If your provider or tools pass
+  secrets under a different field name, add a matcher before the first
+  record.
+</Callout>
+
+### 6. Point CI at replay, with no secrets configured
+
+```yaml
+# .github/workflows/ci.yml
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+```
+
+Nothing here sets `CASSETTE_MODE`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+or any other provider secret. If `cassetteModel` defaults to `'live'`
+when the env var is unset, either default it to `'replay'` in
+non-development environments, or set `CASSETTE_MODE=replay` explicitly
+in the workflow so a missing env var can't silently fall through to a
+live call in CI.
+
+## Verification
+
+Run the test suite locally with replay before you push, so CI is
+confirming what you already saw:
+
+```bash
+CASSETTE_MODE=replay npm test
+```
+
+You should see the cassette hit in the test output and no network
+activity. Then push and confirm the CI job runs green with no secrets
+in the job's environment.
+
+<h2 id="drift-handling">Drift handling</h2>
+
+`replay` never falls back to the live API on a miss, and it never serves
+a stale response: when the request hash (`modelProvider`, `modelId`,
+`prompt`, `toolSchemas`, `maxOutputTokens`, `temperature`, `topP`)
+doesn't match anything in the cassette, `withCassette` / the middleware
+throws `CassetteMissError` and the test fails.
+
+That happens whenever:
+
+- the prompt or system instructions change,
+- a tool's input schema changes (its description does not: schemas are
+  normalized before hashing),
+- a sampling parameter (`temperature`, `topP`, `maxOutputTokens`)
+  changes,
+- or the agent makes a call the cassette never recorded.
+
+```ts
+import { CassetteMissError } from '@nkwib/tapedeck';
+
+await expect(
+  withCassette('order-lookup.json', () =>
+    runAgent({ model, prompt: 'a prompt that was never recorded' }),
+  ),
+).rejects.toBeInstanceOf(CassetteMissError);
+```
+
+To fix a real miss, re-record and review the diff:
+
+```bash
+ANTHROPIC_API_KEY=sk-... npx tsx scripts/record.ts
+git diff cassettes/order-lookup.json
+git add cassettes/order-lookup.json && git commit -m "re-record order-lookup cassette"
+```
+
+<Callout kind="info" title="A miss is a signal, not a flake">
+  <code>CassetteMissError</code> means the request your code makes today
+  no longer matches the committed fixture: re-record, read the diff,
+  commit. See <a href="/decisions/miss-throws-in-ci">why a miss throws in CI</a>
+  for the reasoning.
+</Callout>
+
+There is a second, quieter kind of drift this recipe's `replay` gate
+cannot catch: the *model* changing its answer to the same recorded
+request. `replay` never calls the model, so it can't notice. If you want
+that check, run tapedeck's `compare` mode on a schedule (not on every
+push, since it calls the live API and costs tokens): `npx tapedeck
+compare pnpm test` runs your suite with `CASSETTE_MODE=compare`,
+compares each live response against its cassette on tool-call
+trajectory, finish reason, and text, and propagates the child process's
+exit code, so a scheduled workflow can fail on drift the way the weekly
+cron in tapedeck's own CI does. See the [drift detection
+section](/docs#compare) of the guide.
+
+## Full runnable example
+
+[`nkwib/agent-ci-zero-api`](https://github.com/nkwib/agent-ci-zero-api)
+is a complete, runnable template of this exact recipe: one agent with a
+`lookupOrder` tool, `generateText` with `stopWhen: stepCountIs(3)`, a
+cassette recorded against a scripted mock model (so the repo works with
+no API key out of the box), a `CassetteMissError` drift test, and a
+`record:real` script for re-recording against the live Anthropic API.
+Its `ci.yml` is `npm ci && npm test` with no secrets configured, which
+is the whole point.

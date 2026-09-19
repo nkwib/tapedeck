@@ -1,6 +1,6 @@
 # tapedeck
 
-> **[📼 Docs site](https://tapedeck.pages.dev/)** · **[Quickstart](https://tapedeck.pages.dev/docs#quickstart)** · **[API reference](https://tapedeck.pages.dev/api)** · **[Before / after](https://tapedeck.pages.dev/before-after)** · **[Decisions](https://tapedeck.pages.dev/decisions)**
+> **[📼 Docs site](https://tapedeck.pages.dev/)** · **[Quickstart](https://tapedeck.pages.dev/docs#quickstart)** · **[API reference](https://tapedeck.pages.dev/api)** · **[Before / after](https://tapedeck.pages.dev/before-after)** · **[Decisions](https://tapedeck.pages.dev/decisions)** · **[CI recipe](https://tapedeck.pages.dev/recipes/ci-zero-api-calls)**
 
 **Record/replay middleware for the [Vercel AI SDK](https://sdk.vercel.ai).** Wrap your model in one line. Run your agent test once against the live API — commit the cassette. Every CI run after that is deterministic, offline, free, and stream-accurate.
 
