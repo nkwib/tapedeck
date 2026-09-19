@@ -409,6 +409,14 @@ pnpm test       # vitest run
 pnpm typecheck  # tsc --noEmit
 ```
 
+## Releasing
+
+1. Bump the version in `package.json` and add a `CHANGELOG.md` entry.
+2. Tag the release and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. `.github/workflows/release.yml` builds, tests, and runs `npm publish --provenance` for that tag.
+
+One-time setup on npmjs.com (package settings, Trusted Publisher): provider GitHub Actions, repo `nkwib/tapedeck`, workflow `release.yml`, environment left blank.
+
 ## License
 
 MIT
