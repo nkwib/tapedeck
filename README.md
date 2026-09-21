@@ -415,7 +415,7 @@ pnpm typecheck  # tsc --noEmit
 2. Tag the release and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. `.github/workflows/release.yml` builds, tests, and runs `npm publish --provenance` for that tag.
 
-One-time setup on npmjs.com (package settings, Trusted Publisher): provider GitHub Actions, repo `nkwib/tapedeck`, workflow `release.yml`, environment left blank.
+One-time setup on npmjs.com (package settings, Trusted Publisher): provider GitHub Actions, repo `nkwib/tapedeck`, workflow `release.yml`, environment left blank. Under Allowed actions, enable `npm publish` as well: a new trusted publisher only allows `npm stage publish` by default, and the direct `npm publish` in the workflow then fails with `403 OIDC permission denied for this action`. Set this when you create the connection: npm does not allow editing a trusted publisher afterwards, so a stage-only connection has to be deleted and added again.
 
 ## License
 
