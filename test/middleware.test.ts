@@ -17,6 +17,7 @@ import {
   CassetteSecretError,
 } from '../src/errors.js';
 import { computeCassetteHash } from '../src/hash.js';
+import { DEFAULT_REDACT, redact } from '../src/redact.js';
 import { writeCassetteFile, cassettePathForHash, CASSETTE_VERSION } from '../src/cassette.js';
 
 // ---- fixtures ---------------------------------------------------------------
@@ -279,6 +280,56 @@ describe('cassetteMiddleware — secret redaction', () => {
     });
 
     await expect(model.doGenerate(CALL)).rejects.toBeInstanceOf(CassetteSecretError);
+  });
+
+  it('redact() keeps a Date as an equal Date', () => {
+    const timestamp = new Date('2026-06-10T12:00:00Z');
+    const redacted = redact({ metadata: { timestamp } }, DEFAULT_REDACT);
+    expect(redacted.metadata.timestamp).toEqual(timestamp);
+  });
+
+  it('round-trips a generate response timestamp through record and replay', async () => {
+    const timestamp = new Date('2026-06-10T12:00:00Z');
+    await wrapLanguageModel({
+      model: new MockLanguageModelV3({
+        doGenerate: async () => generateResult({ response: { timestamp } }),
+      }),
+      middleware: cassetteMiddleware({ mode: 'record', cassetteDir: dir }),
+    }).doGenerate(CALL);
+
+    const files = await readdir(dir);
+    const cassette = JSON.parse(await readFile(join(dir, files[0]!), 'utf8'));
+    expect(cassette.response.metadata.timestamp).toBe('2026-06-10T12:00:00.000Z');
+
+    const replayed = await wrapLanguageModel({
+      model: new MockLanguageModelV3(),
+      middleware: cassetteMiddleware({ mode: 'replay', cassetteDir: dir }),
+    }).doGenerate(CALL);
+    expect(replayed.response?.timestamp).toEqual(timestamp);
+  });
+
+  it('round-trips a stream response-metadata timestamp through record and replay', async () => {
+    const timestamp = new Date('2026-06-10T12:00:00Z');
+    const chunks: LanguageModelV3StreamPart[] = [
+      { type: 'response-metadata', timestamp },
+      ...streamChunks(),
+    ];
+    const recorded = await wrapLanguageModel({
+      model: new MockLanguageModelV3({
+        doStream: async () => ({ stream: arrayToStream(chunks) }),
+      }),
+      middleware: cassetteMiddleware({ mode: 'record', cassetteDir: dir }),
+    }).doStream(CALL);
+    const replayed = await wrapLanguageModel({
+      model: new MockLanguageModelV3(),
+      middleware: cassetteMiddleware({ mode: 'replay', cassetteDir: dir }),
+    }).doStream(CALL);
+
+    // Record mode re-serves the redacted chunks, so both callers depend on redact().
+    for (const { stream } of [recorded, replayed]) {
+      const parts = await drain(stream);
+      expect(parts.find((p) => p.type === 'response-metadata')).toMatchObject({ timestamp });
+    }
   });
 });
 

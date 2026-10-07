@@ -30,6 +30,16 @@ semantic versioning once it reaches 1.0.0.
   restores the old behaviour, with the headers still redacted. Stream
   cassettes never carried headers and are unchanged.
 
+### Fixed
+
+- **Response timestamps survive recording.** `redact()` rebuilt every object
+  key by key, so a `Date` came out as `{}`: generate cassettes stored
+  `metadata.timestamp` as `{}`, stream `response-metadata` parts did the same
+  (and the record-mode caller received `{}`), and replay revived both as an
+  Invalid Date. Dates now pass through redaction intact, so cassettes store
+  the ISO string and replay revives the original instant. Cassettes recorded
+  with the bug still hold `{}`: re-record them.
+
 ## 0.4.0 - 2026-08-11
 
 ### Added
