@@ -67,6 +67,7 @@ and replaying with no other code changes. A bad static `mode` throws
 | `mode` | `'record' \| 'replay' \| 'compare' \| 'live'` | `'live'` | Operating mode. `record` calls the real model and persists request + response; `replay` serves a cassette by hash and throws on a miss; `compare` calls the model *and* reads the cassette, reports the drift, and never writes; `live` is passthrough. |
 | `cassetteDir` | `string` | `'./cassettes'` | Directory cassettes are read from / written to. |
 | `redact` | `(string \| RegExp)[]` | `[]` | Extra key matchers, merged with [`DEFAULT_REDACT`](#DEFAULT_REDACT). Strings match field/header names case-insensitively; RegExps test the raw key. |
+| `keepResponseHeaders` | `boolean` | `false` | Write response headers (`response.metadata.headers`) into generate cassettes, still redacted. Off by default: they carry account and request identifiers, replay never reads them, and they turn every re-record into a noisy diff. Stream cassettes never carry headers. |
 | `cassetteName` | `string` | &mdash; | Force a specific filename instead of hash-addressed lookup. Named cassettes are multi-interaction: every call is stored in the file keyed by request hash. Mostly used internally by [`withCassette`](#withCassette); set it for fixed fixtures. |
 | `store` | `CassetteStore` | filesystem | Storage backend (`read`/`write`/`list`). Pass [`memoryCassetteStore()`](#memoryCassetteStore) on edge runtimes where there is no filesystem. |
 | `tracer` | `TapedeckTracer` | &mdash; | OTel-compatible tracer (e.g. `trace.getTracer('tapedeck')`). Emits `tapedeck.generate` / `tapedeck.stream` spans with mode, hash, path, and hit/miss attributes; misses record the exception with an error status. `compare` spans also carry `tapedeck.compare_equal`. |
@@ -699,6 +700,9 @@ The placeholder string written in place of a matched secret value at record time
   'x-api-key',
   'bearer',
   'token',
+  'anthropic-organization-id',
+  'anthropic-workspace-id',
+  'openai-organization',
 ];`}
 />
 

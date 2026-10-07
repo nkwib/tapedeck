@@ -15,6 +15,10 @@ export const DEFAULT_REDACT: Array<string | RegExp> = [
   'x-api-key',
   'bearer',
   'token',
+  // Account identifiers providers send as response headers.
+  'anthropic-organization-id',
+  'anthropic-workspace-id',
+  'openai-organization',
 ];
 
 export type RedactMatcher = string | RegExp;
@@ -44,6 +48,8 @@ function redactInner(value: unknown, matchers: RedactMatcher[]): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => redactInner(item, matchers));
   }
+  // A Date has no own keys, so rebuilding it as a record would yield `{}`.
+  if (value instanceof Date) return new Date(value.getTime());
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {

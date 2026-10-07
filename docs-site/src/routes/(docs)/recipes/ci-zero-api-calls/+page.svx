@@ -142,7 +142,9 @@ changed to, the same way they'd read any other diff.
 <Callout kind="warn" title="Check for secrets before committing">
   Redaction runs at record time against the built-in matchers
   (<code>apiKey</code>, <code>authorization</code>, <code>x-api-key</code>,
-  <code>bearer</code>, <code>token</code>) plus anything you pass via
+  <code>bearer</code>, <code>token</code>, <code>anthropic-organization-id</code>,
+  <code>anthropic-workspace-id</code>, <code>openai-organization</code>) plus
+  anything you pass via
   <code>redact: (string | RegExp)[]</code>. If your provider or tools pass
   secrets under a different field name, add a matcher before the first
   record.

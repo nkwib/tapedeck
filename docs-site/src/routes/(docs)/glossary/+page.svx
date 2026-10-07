@@ -109,7 +109,8 @@ fixture.
 
 A key-name rule that strips secrets at **record time**, so they never
 reach disk. Defaults: `apiKey`, `authorization`, `x-api-key`, `bearer`,
-`token` (case-insensitive). Extend via `redact: (string | RegExp)[]` —
+`token`, `anthropic-organization-id`, `anthropic-workspace-id`,
+`openai-organization` (case-insensitive). Extend via `redact: (string | RegExp)[]`:
 strings match field/header names case-insensitively, RegExps test the
 raw key. A replayed cassette that still contains a value a matcher would
 strip throws `CassetteSecretError`.

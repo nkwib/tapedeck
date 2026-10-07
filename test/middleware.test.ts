@@ -17,6 +17,7 @@ import {
   CassetteSecretError,
 } from '../src/errors.js';
 import { computeCassetteHash } from '../src/hash.js';
+import { DEFAULT_REDACT, redact } from '../src/redact.js';
 import { writeCassetteFile, cassettePathForHash, CASSETTE_VERSION } from '../src/cassette.js';
 
 // ---- fixtures ---------------------------------------------------------------
@@ -43,6 +44,14 @@ function generateResult(
     ...overrides,
   };
 }
+
+// Response metadata as a live provider returns it, account-identifying headers included.
+const responseWithHeaders = {
+  id: 'resp_1',
+  modelId: 'mock-model-id',
+  timestamp: new Date('2026-06-10T12:00:00Z'),
+  headers: { 'anthropic-organization-id': 'org_test', 'content-type': 'application/json' },
+};
 
 function streamChunks(): LanguageModelV3StreamPart[] {
   return [
@@ -184,7 +193,11 @@ describe('cassetteMiddleware — secret redaction', () => {
             response: { headers: { authorization: 'Bearer super-secret-token' } },
           }),
       }),
-      middleware: cassetteMiddleware({ mode: 'record', cassetteDir: dir }),
+      middleware: cassetteMiddleware({
+        mode: 'record',
+        cassetteDir: dir,
+        keepResponseHeaders: true,
+      }),
     });
 
     await model.doGenerate(CALL);
@@ -195,7 +208,52 @@ describe('cassetteMiddleware — secret redaction', () => {
     expect(raw).toContain('[REDACTED]');
   });
 
-  it('throws CassetteSecretError when replaying a leaky cassette', async () => {
+  it('drops response headers from the cassette by default', async () => {
+    const model = wrapLanguageModel({
+      model: new MockLanguageModelV3({
+        doGenerate: async () => generateResult({ response: responseWithHeaders }),
+      }),
+      middleware: cassetteMiddleware({ mode: 'record', cassetteDir: dir }),
+    });
+
+    const result = await model.doGenerate(CALL);
+
+    const files = await readdir(dir);
+    const cassette = JSON.parse(await readFile(join(dir, files[0]!), 'utf8'));
+    expect(cassette.response.metadata).not.toHaveProperty('headers');
+    expect(cassette.response.metadata).toMatchObject({ id: 'resp_1', modelId: 'mock-model-id' });
+    // Only the cassette loses them: the caller still gets the live headers.
+    expect(result.response?.headers).toEqual(responseWithHeaders.headers);
+  });
+
+  it('keeps response headers, redacted, with keepResponseHeaders', async () => {
+    const model = wrapLanguageModel({
+      model: new MockLanguageModelV3({
+        doGenerate: async () => generateResult({ response: responseWithHeaders }),
+      }),
+      middleware: cassetteMiddleware({
+        mode: 'record',
+        cassetteDir: dir,
+        keepResponseHeaders: true,
+      }),
+    });
+
+    await model.doGenerate(CALL);
+
+    const files = await readdir(dir);
+    const cassette = JSON.parse(await readFile(join(dir, files[0]!), 'utf8'));
+    expect(cassette.response.metadata.headers).toEqual({
+      'anthropic-organization-id': '[REDACTED]',
+      'content-type': 'application/json',
+    });
+  });
+
+  it.each([
+    'authorization',
+    'anthropic-organization-id',
+    'anthropic-workspace-id',
+    'openai-organization',
+  ])('throws CassetteSecretError when replaying a leaked %s header', async (header) => {
     const hash = await computeCassetteHash({
       modelProvider: 'mock-provider',
       modelId: 'mock-model-id',
@@ -212,7 +270,7 @@ describe('cassetteMiddleware — secret redaction', () => {
         finishReason: { unified: 'stop', raw: 'stop' },
         usage,
         warnings: [],
-        metadata: { headers: { authorization: 'Bearer leaked' } },
+        metadata: { headers: { [header]: 'leaked' } },
       },
     });
 
@@ -222,6 +280,56 @@ describe('cassetteMiddleware — secret redaction', () => {
     });
 
     await expect(model.doGenerate(CALL)).rejects.toBeInstanceOf(CassetteSecretError);
+  });
+
+  it('redact() keeps a Date as an equal Date', () => {
+    const timestamp = new Date('2026-06-10T12:00:00Z');
+    const redacted = redact({ metadata: { timestamp } }, DEFAULT_REDACT);
+    expect(redacted.metadata.timestamp).toEqual(timestamp);
+  });
+
+  it('round-trips a generate response timestamp through record and replay', async () => {
+    const timestamp = new Date('2026-06-10T12:00:00Z');
+    await wrapLanguageModel({
+      model: new MockLanguageModelV3({
+        doGenerate: async () => generateResult({ response: { timestamp } }),
+      }),
+      middleware: cassetteMiddleware({ mode: 'record', cassetteDir: dir }),
+    }).doGenerate(CALL);
+
+    const files = await readdir(dir);
+    const cassette = JSON.parse(await readFile(join(dir, files[0]!), 'utf8'));
+    expect(cassette.response.metadata.timestamp).toBe('2026-06-10T12:00:00.000Z');
+
+    const replayed = await wrapLanguageModel({
+      model: new MockLanguageModelV3(),
+      middleware: cassetteMiddleware({ mode: 'replay', cassetteDir: dir }),
+    }).doGenerate(CALL);
+    expect(replayed.response?.timestamp).toEqual(timestamp);
+  });
+
+  it('round-trips a stream response-metadata timestamp through record and replay', async () => {
+    const timestamp = new Date('2026-06-10T12:00:00Z');
+    const chunks: LanguageModelV3StreamPart[] = [
+      { type: 'response-metadata', timestamp },
+      ...streamChunks(),
+    ];
+    const recorded = await wrapLanguageModel({
+      model: new MockLanguageModelV3({
+        doStream: async () => ({ stream: arrayToStream(chunks) }),
+      }),
+      middleware: cassetteMiddleware({ mode: 'record', cassetteDir: dir }),
+    }).doStream(CALL);
+    const replayed = await wrapLanguageModel({
+      model: new MockLanguageModelV3(),
+      middleware: cassetteMiddleware({ mode: 'replay', cassetteDir: dir }),
+    }).doStream(CALL);
+
+    // Record mode re-serves the redacted chunks, so both callers depend on redact().
+    for (const { stream } of [recorded, replayed]) {
+      const parts = await drain(stream);
+      expect(parts.find((p) => p.type === 'response-metadata')).toMatchObject({ timestamp });
+    }
   });
 });
 

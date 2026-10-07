@@ -34,8 +34,9 @@ cassetteMiddleware({
 });
 ```
 
-Default matchers: `apiKey`, `authorization`, `x-api-key`, `bearer`,
-`token` — all case-insensitive.
+Default matchers, all case-insensitive: `apiKey`, `authorization`,
+`x-api-key`, `bearer`, `token`, and the account identifier headers
+`anthropic-organization-id`, `anthropic-workspace-id`, `openai-organization`.
 
 ## Why at record time and not at read time
 
