@@ -69,7 +69,7 @@
     }
   },
   "devDependencies": {
-    "@ai-sdk/provider": "3.0.10",
+    "@ai-sdk/provider": "4.0.17",
     "@ai-sdk/provider-v4": "npm:@ai-sdk/provider@4.0.7",
     "@types/node": "^22.0.0",
     "ai": "^7.0.58",
