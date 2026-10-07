@@ -44,6 +44,14 @@ function generateResult(
   };
 }
 
+// Response metadata as a live provider returns it, account-identifying headers included.
+const responseWithHeaders = {
+  id: 'resp_1',
+  modelId: 'mock-model-id',
+  timestamp: new Date('2026-06-10T12:00:00Z'),
+  headers: { 'anthropic-organization-id': 'org_test', 'content-type': 'application/json' },
+};
+
 function streamChunks(): LanguageModelV3StreamPart[] {
   return [
     { type: 'stream-start', warnings: [] },
@@ -184,7 +192,11 @@ describe('cassetteMiddleware — secret redaction', () => {
             response: { headers: { authorization: 'Bearer super-secret-token' } },
           }),
       }),
-      middleware: cassetteMiddleware({ mode: 'record', cassetteDir: dir }),
+      middleware: cassetteMiddleware({
+        mode: 'record',
+        cassetteDir: dir,
+        keepResponseHeaders: true,
+      }),
     });
 
     await model.doGenerate(CALL);
@@ -195,7 +207,52 @@ describe('cassetteMiddleware — secret redaction', () => {
     expect(raw).toContain('[REDACTED]');
   });
 
-  it('throws CassetteSecretError when replaying a leaky cassette', async () => {
+  it('drops response headers from the cassette by default', async () => {
+    const model = wrapLanguageModel({
+      model: new MockLanguageModelV3({
+        doGenerate: async () => generateResult({ response: responseWithHeaders }),
+      }),
+      middleware: cassetteMiddleware({ mode: 'record', cassetteDir: dir }),
+    });
+
+    const result = await model.doGenerate(CALL);
+
+    const files = await readdir(dir);
+    const cassette = JSON.parse(await readFile(join(dir, files[0]!), 'utf8'));
+    expect(cassette.response.metadata).not.toHaveProperty('headers');
+    expect(cassette.response.metadata).toMatchObject({ id: 'resp_1', modelId: 'mock-model-id' });
+    // Only the cassette loses them: the caller still gets the live headers.
+    expect(result.response?.headers).toEqual(responseWithHeaders.headers);
+  });
+
+  it('keeps response headers, redacted, with keepResponseHeaders', async () => {
+    const model = wrapLanguageModel({
+      model: new MockLanguageModelV3({
+        doGenerate: async () => generateResult({ response: responseWithHeaders }),
+      }),
+      middleware: cassetteMiddleware({
+        mode: 'record',
+        cassetteDir: dir,
+        keepResponseHeaders: true,
+      }),
+    });
+
+    await model.doGenerate(CALL);
+
+    const files = await readdir(dir);
+    const cassette = JSON.parse(await readFile(join(dir, files[0]!), 'utf8'));
+    expect(cassette.response.metadata.headers).toEqual({
+      'anthropic-organization-id': '[REDACTED]',
+      'content-type': 'application/json',
+    });
+  });
+
+  it.each([
+    'authorization',
+    'anthropic-organization-id',
+    'anthropic-workspace-id',
+    'openai-organization',
+  ])('throws CassetteSecretError when replaying a leaked %s header', async (header) => {
     const hash = await computeCassetteHash({
       modelProvider: 'mock-provider',
       modelId: 'mock-model-id',
@@ -212,7 +269,7 @@ describe('cassetteMiddleware — secret redaction', () => {
         finishReason: { unified: 'stop', raw: 'stop' },
         usage,
         warnings: [],
-        metadata: { headers: { authorization: 'Bearer leaked' } },
+        metadata: { headers: { [header]: 'leaked' } },
       },
     });
 

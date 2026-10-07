@@ -97,6 +97,11 @@ export interface CassetteMiddlewareOptions {
    */
   redact?: RedactMatcher[];
   /**
+   * Response headers carry account and request identifiers and replay never
+   * reads them, so they are dropped from the cassette unless this is `true`.
+   */
+  keepResponseHeaders?: boolean;
+  /**
    * Force a specific cassette filename instead of hash-addressed lookup. The
    * named file is multi-interaction: every call records/replays its own entry,
    * keyed by request hash. Mostly used internally by `withCassette`; can be set
@@ -140,6 +145,7 @@ interface Resolved {
   cassetteDir: string;
   cassetteName: string | undefined;
   matchers: RedactMatcher[];
+  keepResponseHeaders: boolean;
   store: CassetteStore;
   tracer: TapedeckTracer | undefined;
   onCompare: CassetteMiddlewareOptions['onCompare'];
@@ -156,6 +162,7 @@ function resolveConfig(options: CassetteMiddlewareOptions, defaultStore: Cassett
     cassetteDir: ctx?.cassetteDir ?? options.cassetteDir ?? './cassettes',
     cassetteName: ctx?.cassetteName ?? options.cassetteName,
     matchers: [...DEFAULT_REDACT, ...(options.redact ?? [])],
+    keepResponseHeaders: options.keepResponseHeaders ?? false,
     store: options.store ?? defaultStore,
     tracer: options.tracer,
     onCompare: options.onCompare,
@@ -393,7 +400,7 @@ export function cassetteMiddleware(
             cfg,
             hash,
             redact(buildRequest(params, model), cfg.matchers),
-            redact(response, cfg.matchers),
+            redact(cfg.keepResponseHeaders ? response : withoutHeaders(response), cfg.matchers),
             path,
           );
           return live;
@@ -470,6 +477,13 @@ function generateResponse(live: LiveGenerateResult): GenerateCassetteResponse {
     warnings: live.warnings ?? [],
     metadata: live.response,
   };
+}
+
+/** `response` minus `metadata.headers`, without mutating the live result that shares it. */
+function withoutHeaders(response: GenerateCassetteResponse): GenerateCassetteResponse {
+  if (!response.metadata?.headers) return response;
+  const { headers: _headers, ...metadata } = response.metadata;
+  return { ...response, metadata };
 }
 
 /** Re-serve drained chunks as a fresh stream result, keeping the live metadata. */

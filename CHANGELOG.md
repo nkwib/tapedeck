@@ -4,6 +4,32 @@ All notable changes to tapedeck are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 semantic versioning once it reaches 1.0.0.
 
+## 0.5.0 - Unreleased
+
+> **Upgrade note.** A cassette recorded by an earlier version that still
+> carries `anthropic-organization-id`, `anthropic-workspace-id` or
+> `openai-organization` values now throws `CassetteSecretError` at replay
+> (and in `compare` mode, which loads the same file). Re-record it, or delete
+> `response.metadata.headers` from the file.
+
+### Added
+
+- `anthropic-organization-id`, `anthropic-workspace-id` and
+  `openai-organization` in `DEFAULT_REDACT`: account identifiers are
+  redacted at record time and flagged at replay, including in headers kept
+  with `keepResponseHeaders`.
+
+### Changed
+
+- **Response headers are no longer written to cassettes by default.** Record
+  mode persisted every HTTP response header of a `doGenerate` result under
+  `response.metadata.headers`: a live Anthropic recording stored 28 per
+  interaction, among them the organisation and workspace ids, the account's
+  rate-limit ceilings, `request-id` and `cf-ray`. Replay never reads them, and
+  they turned every re-record into a large diff. `keepResponseHeaders: true`
+  restores the old behaviour, with the headers still redacted. Stream
+  cassettes never carried headers and are unchanged.
+
 ## 0.4.0 - 2026-08-11
 
 ### Added

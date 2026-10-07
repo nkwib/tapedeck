@@ -289,8 +289,9 @@ KV/R2-backed `CassetteStore`), and record from Node. See `COMPATIBILITY.md`.
 
 Redaction is key-name based and runs **at record time**, so secrets never reach disk:
 
-- Default matchers: `apiKey`, `authorization`, `x-api-key`, `bearer`, `token` (case-insensitive).
+- Default matchers: `apiKey`, `authorization`, `x-api-key`, `bearer`, `token`, and the account identifier headers `anthropic-organization-id`, `anthropic-workspace-id`, `openai-organization` (case-insensitive).
 - Configurable via `redact: (string | RegExp)[]` — strings match field/header names case-insensitively; RegExps test the raw key.
+- Response headers are dropped before a cassette is written: they carry account and request identifiers, replay never reads them, and they turn every re-record into a noisy diff. `keepResponseHeaders: true` keeps them, still redacted.
 - Replaying a cassette that still contains a value a matcher would strip throws `CassetteSecretError` — a committed secret fails the build instead of leaking.
 
 ```typescript
@@ -328,6 +329,7 @@ supported `ai` majors. Intercepts both `doGenerate` and `doStream`.
 | `mode` | `'record' \| 'replay' \| 'compare' \| 'live'` | `'live'` | Operating mode. |
 | `cassetteDir` | `string` | `'./cassettes'` | Directory cassettes are read from / written to. |
 | `redact` | `(string \| RegExp)[]` | `[]` | Extra key matchers, merged with the built-in defaults. |
+| `keepResponseHeaders` | `boolean` | `false` | Write response headers into generate cassettes, still redacted. Off by default: they carry account and request identifiers and replay never reads them. |
 | `cassetteName` | `string` | — | Force a specific filename instead of hash-addressing. Mostly used internally by `withCassette`. |
 | `store` | `CassetteStore` | filesystem | Storage backend (`read`/`write`/`list`). Use `memoryCassetteStore()` on edge runtimes. |
 | `tracer` | `TapedeckTracer` | — | OTel-compatible tracer; emits `tapedeck.generate` / `tapedeck.stream` spans. |

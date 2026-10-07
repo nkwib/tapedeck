@@ -15,6 +15,10 @@ export const DEFAULT_REDACT: Array<string | RegExp> = [
   'x-api-key',
   'bearer',
   'token',
+  // Account identifiers providers send as response headers.
+  'anthropic-organization-id',
+  'anthropic-workspace-id',
+  'openai-organization',
 ];
 
 export type RedactMatcher = string | RegExp;
